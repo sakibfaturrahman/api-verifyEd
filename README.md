@@ -1,3 +1,3 @@
 # api-verifyEd
 
-tungggu test
+tungggu test kayanya beres deh
