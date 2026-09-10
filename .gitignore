@@ -36,3 +36,5 @@ tmp/
 
 # TypeScript incremental compilation info
 *.tsbuildinfo
+
+.vercel

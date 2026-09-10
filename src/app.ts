@@ -13,21 +13,28 @@ import apiRouter from "./routes/index";
 
 import { logger } from "./core/utils/logger";
 
-//  Structured Logger
+// Structured Logger
 export { logger };
 
-//  Express App
+// Express App
 const app = express();
 
-// Security headers
+// CDN URL resmi Swagger UI
+const SWAGGER_CDN = "https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.11.0";
+
+// Security headers (izinkan CDN untuk Swagger UI)
 app.use(
   helmet({
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'"], // Required for Swagger UI
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", "data:"],
+        scriptSrc: [
+          "'self'",
+          "'unsafe-inline'",
+          "https://cdnjs.cloudflare.com",
+        ],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+        imgSrc: ["'self'", "data:", "https://validator.swagger.io"],
       },
     },
   }),
@@ -38,7 +45,6 @@ const allowedOrigins = env.CORS_ORIGIN.split(",").map((o) => o.trim());
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (e.g., mobile apps, curl, Postman)
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
@@ -51,11 +57,11 @@ app.use(
   }),
 );
 
-// Request parsing — strict size limits
+// Request parsing
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
-// HTTP request logging (structured)
+// HTTP request logging
 app.use(
   pinoHttp({
     logger,
@@ -64,7 +70,6 @@ app.use(
       if (res.statusCode >= 400) return "warn";
       return "info";
     },
-    // Don't log health check noise
     autoLogging: { ignore: (req) => req.url === "/health" },
   }),
 );
@@ -72,18 +77,7 @@ app.use(
 // Global rate limit
 app.use("/api", apiRateLimit);
 
-//  Health Check
-
-/**
- * @openapi
- * /health:
- *   get:
- *     tags: [System]
- *     summary: Health check
- *     responses:
- *       200:
- *         description: Service is healthy
- */
+// Health Check
 app.get("/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
@@ -94,18 +88,6 @@ app.get("/health", (_req: Request, res: Response) => {
   });
 });
 
-/**
- * @openapi
- * /health/database:
- *   get:
- *     tags: [System]
- *     summary: Database connectivity check
- *     responses:
- *       200:
- *         description: Database is reachable
- *       503:
- *         description: Database unreachable
- */
 app.get("/health/database", async (_req: Request, res: Response) => {
   const { checkDatabaseConnection } = await import("./config/supabase");
   const isConnected = await checkDatabaseConnection();
@@ -117,13 +99,24 @@ app.get("/health/database", async (_req: Request, res: Response) => {
   });
 });
 
-//  Swagger UI ──
+// Swagger UI via CDN (Serverless Compatible)
 app.use(
   "/api/docs",
-  swaggerUi.serve,
+  swaggerUi.serveFiles(swaggerSpec, {
+    customCssUrl: `${SWAGGER_CDN}/swagger-ui.min.css`,
+    customJs: [
+      `${SWAGGER_CDN}/swagger-ui-bundle.min.js`,
+      `${SWAGGER_CDN}/swagger-ui-standalone-preset.min.js`,
+    ],
+  }),
   swaggerUi.setup(swaggerSpec, {
     customSiteTitle: "VerifyEd API Docs",
     customCss: ".swagger-ui .topbar { display: none }",
+    customCssUrl: `${SWAGGER_CDN}/swagger-ui.min.css`,
+    customJs: [
+      `${SWAGGER_CDN}/swagger-ui-bundle.min.js`,
+      `${SWAGGER_CDN}/swagger-ui-standalone-preset.min.js`,
+    ],
     swaggerOptions: {
       persistAuthorization: true,
       tryItOutEnabled: true,
@@ -137,10 +130,10 @@ app.get("/api/docs.json", (_req: Request, res: Response) => {
   res.send(swaggerSpec);
 });
 
-//  API Routes
+// API Routes
 app.use("/api/v1", apiRouter);
 
-//  404 Handler
+// 404 Handler
 app.use((_req: Request, res: Response) => {
   res.status(404).json({
     success: false,
@@ -149,7 +142,7 @@ app.use((_req: Request, res: Response) => {
   });
 });
 
-//  Centralized Error Handler
+// Centralized Error Handler
 app.use(
   errorMiddleware as (
     err: Error,

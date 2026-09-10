@@ -1,3 +1,4 @@
+import path from "path";
 import swaggerJsdoc from "swagger-jsdoc";
 import { env } from "./env";
 
@@ -69,7 +70,7 @@ Response payload menyertakan metadata pagination pada object \`meta\`.
         description: "Production Server (Vercel)",
       },
       {
-        url: `http://localhost:${env.PORT}`,
+        url: `http://localhost:${env.PORT || 5000}`,
         description: "Local Development Server",
       },
     ],
@@ -254,7 +255,15 @@ Response payload menyertakan metadata pagination pada object \`meta\`.
       { name: "Admin", description: "Admin-only management endpoints" },
     ],
   },
-  apis: ["./src/**/*.routes.ts", "./src/**/*.controller.ts"],
+  // Menggunakan path absolut runtime yang mencakup modul routes & controllers
+  apis: [
+    path.join(process.cwd(), "src/**/*.routes.ts"),
+    path.join(process.cwd(), "src/**/*.controller.ts"),
+    path.join(process.cwd(), "src/app.ts"),
+    path.join(__dirname, "../**/*.routes.{ts,js}"),
+    path.join(__dirname, "../**/*.controller.{ts,js}"),
+    path.join(__dirname, "../app.{ts,js}"),
+  ],
 };
 
 export const swaggerSpec = swaggerJsdoc(options);
