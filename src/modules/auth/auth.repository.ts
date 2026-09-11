@@ -1,4 +1,4 @@
-import { supabase } from '../../config/supabase';
+import { supabase } from "../../config/supabase";
 
 export interface ProfileRow {
   id: string;
@@ -8,8 +8,8 @@ export interface ProfileRow {
   address: string | null;
   description: string | null;
   avatar_url: string | null;
-  role: 'admin' | 'user';
-  status: 'active' | 'inactive';
+  role: "admin" | "user";
+  status: "active" | "inactive";
   created_at: string;
   updated_at: string;
 }
@@ -23,71 +23,82 @@ export class AuthRepository {
   async createAuthUser(
     email: string,
     password: string,
+    metadata: {
+      name: string;
+      phone?: string;
+      address?: string;
+      description?: string;
+    },
+  ): Promise<{ userId: string; email: string }> {
+    const { data, error } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: metadata,
+    });
+
+    if (error) throw error;
+    if (!data.user) throw new Error("User creation failed");
+
+    // Update profil untuk memastikan kolom nullable terisi
+    await supabase
+      .from("profiles")
+      .update({
+        phone: metadata.phone || null,
+        address: metadata.address || null,
+        description: metadata.description || null,
+      })
+      .eq("id", data.user.id);
+
+    return { userId: data.user.id, email: data.user.email! };
+  }
+
+  // Tambahkan di AuthRepository
+  async createAdminUser(
+    email: string,
+    password: string,
     name: string,
   ): Promise<{ userId: string; email: string }> {
     const { data, error } = await supabase.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
-      user_metadata: { 
-        name,
-        role: 'user' // Eksplisit mengirimkan role 'user'
-      },
+      user_metadata: { name, role: "admin" },
     });
 
     if (error) throw error;
-    if (!data.user) throw new Error('User creation failed: no user returned');
+    if (!data.user) throw new Error("Failed to create admin user");
+
+    // Update paksa kolom role di tabel profiles menjadi admin
+    const { error: profileError } = await supabase
+      .from("profiles")
+      .update({ role: "admin" })
+      .eq("id", data.user.id);
+
+    if (profileError) throw profileError;
 
     return { userId: data.user.id, email: data.user.email! };
   }
 
+  async getAdmins(): Promise<ProfileRow[]> {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("role", "admin")
+      .order("created_at", { ascending: false });
 
-  // Tambahkan di AuthRepository
-async createAdminUser(
-  email: string,
-  password: string,
-  name: string,
-): Promise<{ userId: string; email: string }> {
-  const { data, error } = await supabase.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-    user_metadata: { name, role: 'admin' },
-  });
-
-  if (error) throw error;
-  if (!data.user) throw new Error('Failed to create admin user');
-
-  // Update paksa kolom role di tabel profiles menjadi admin
-  const { error: profileError } = await supabase
-    .from('profiles')
-    .update({ role: 'admin' })
-    .eq('id', data.user.id);
-
-  if (profileError) throw profileError;
-
-  return { userId: data.user.id, email: data.user.email! };
-}
-
-async getAdmins(): Promise<ProfileRow[]> {
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('role', 'admin')
-    .order('created_at', { ascending: false });
-
-  if (error) throw error;
-  return data as ProfileRow[];
-}
+    if (error) throw error;
+    return data as ProfileRow[];
+  }
 
   async updateAdminProfile(
     adminId: string,
-    payload: Partial<Pick<ProfileRow, 'name' | 'phone' | 'address' | 'status'>>,
+    payload: Partial<Pick<ProfileRow, "name" | "phone" | "address" | "status">>,
   ): Promise<ProfileRow> {
     const { data, error } = await supabase
-      .from('profiles')
+      .from("profiles")
       .update({ ...payload, updated_at: new Date().toISOString() })
-      .eq('id', adminId)
+      .eq("id", adminId)
       .select()
       .single();
 
@@ -112,10 +123,13 @@ async getAdmins(): Promise<ProfileRow[]> {
     refreshToken: string;
     expiresAt: number;
   }> {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
     if (error) throw error;
-    if (!data.session) throw new Error('Sign in failed: no session returned');
+    if (!data.session) throw new Error("Sign in failed: no session returned");
 
     return {
       accessToken: data.session.access_token,
@@ -132,10 +146,12 @@ async getAdmins(): Promise<ProfileRow[]> {
     refreshToken: string;
     expiresAt: number;
   }> {
-    const { data, error } = await supabase.auth.refreshSession({ refresh_token: refreshToken });
+    const { data, error } = await supabase.auth.refreshSession({
+      refresh_token: refreshToken,
+    });
 
     if (error) throw error;
-    if (!data.session) throw new Error('Refresh failed: no session returned');
+    if (!data.session) throw new Error("Refresh failed: no session returned");
 
     return {
       accessToken: data.session.access_token,
@@ -148,7 +164,7 @@ async getAdmins(): Promise<ProfileRow[]> {
    * Signs out a user by revoking all sessions.
    */
   async signOut(userId: string): Promise<void> {
-    await supabase.auth.admin.signOut(userId, 'global');
+    await supabase.auth.admin.signOut(userId, "global");
   }
 
   /**
@@ -156,9 +172,9 @@ async getAdmins(): Promise<ProfileRow[]> {
    */
   async findProfileById(userId: string): Promise<ProfileRow | null> {
     const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
+      .from("profiles")
+      .select("*")
+      .eq("id", userId)
       .single();
 
     if (error) return null;
@@ -170,9 +186,9 @@ async getAdmins(): Promise<ProfileRow[]> {
    */
   async emailExists(email: string): Promise<boolean> {
     const { data } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('email', email)
+      .from("profiles")
+      .select("id")
+      .eq("email", email)
       .single();
 
     return !!data;
