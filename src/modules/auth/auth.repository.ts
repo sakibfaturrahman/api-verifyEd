@@ -19,6 +19,7 @@ export class AuthRepository {
    * Creates a new user in Supabase Auth.
    * The profile row is auto-created by the on_auth_user_created DB trigger.
    */
+  // auth.repository.ts
   async createAuthUser(
     email: string,
     password: string,
@@ -27,8 +28,11 @@ export class AuthRepository {
     const { data, error } = await supabase.auth.admin.createUser({
       email,
       password,
-      email_confirm: true, // Auto-confirm for API-based registration
-      user_metadata: { name },
+      email_confirm: true,
+      user_metadata: { 
+        name,
+        role: 'user' // Eksplisit mengirimkan role 'user'
+      },
     });
 
     if (error) throw error;
@@ -37,6 +41,65 @@ export class AuthRepository {
     return { userId: data.user.id, email: data.user.email! };
   }
 
+
+  // Tambahkan di AuthRepository
+async createAdminUser(
+  email: string,
+  password: string,
+  name: string,
+): Promise<{ userId: string; email: string }> {
+  const { data, error } = await supabase.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { name, role: 'admin' },
+  });
+
+  if (error) throw error;
+  if (!data.user) throw new Error('Failed to create admin user');
+
+  // Update paksa kolom role di tabel profiles menjadi admin
+  const { error: profileError } = await supabase
+    .from('profiles')
+    .update({ role: 'admin' })
+    .eq('id', data.user.id);
+
+  if (profileError) throw profileError;
+
+  return { userId: data.user.id, email: data.user.email! };
+}
+
+async getAdmins(): Promise<ProfileRow[]> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('role', 'admin')
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+  return data as ProfileRow[];
+}
+
+  async updateAdminProfile(
+    adminId: string,
+    payload: Partial<Pick<ProfileRow, 'name' | 'phone' | 'address' | 'status'>>,
+  ): Promise<ProfileRow> {
+    const { data, error } = await supabase
+      .from('profiles')
+      .update({ ...payload, updated_at: new Date().toISOString() })
+      .eq('id', adminId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data as ProfileRow;
+  }
+
+  async deleteAdminUser(adminId: string): Promise<void> {
+    // Hapus akun dari auth Supabase (cascade ke profiles via database constraint)
+    const { error } = await supabase.auth.admin.deleteUser(adminId);
+    if (error) throw error;
+  }
   /**
    * Signs in a user using Supabase Auth and returns the session.
    * Uses anon key sign-in path (not admin) to generate proper tokens.
