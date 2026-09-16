@@ -1,18 +1,33 @@
-import { CertificateRepository, CertificateRow, CertificateWithEvent } from './certificate.repository';
-import { EventService } from '../events/event.service';
-import { RevokeCertificateDto, QrConfigDto, QrConfig, ListCertificatesQuery } from './certificate.validation';
-import { embedQrCodeInPdf } from './certificate.generator';
-import { sha256 } from '../../core/utils/hash';
-import { generateSecureToken, generateCertificateNumber } from '../../core/utils/token';
-import { buildStoragePath, validatePdfFile } from '../../core/utils/file';
-import { parsePagination, buildPaginationMeta } from '../../core/utils/pagination';
-import { NotFoundError } from '../../core/errors/NotFoundError';
-import { ForbiddenError } from '../../core/errors/ForbiddenError';
-import { AppError } from '../../core/errors/AppError';
-import { env } from '../../config/env';
-import { logger } from '../../app';
+// src/modules/certificates/certificate.service.ts
+import {
+  CertificateRepository,
+  CertificateRow,
+  CertificateWithEvent,
+} from "./certificate.repository";
+import { EventService } from "../events/event.service";
+import {
+  RevokeCertificateDto,
+  QrConfigDto,
+  QrConfig,
+  ListCertificatesQuery,
+} from "./certificate.validation";
+import { embedQrCodeInPdf } from "./certificate.generator";
+import { sha256 } from "../../core/utils/hash";
+import {
+  generateSecureToken,
+  generateCertificateNumber,
+} from "../../core/utils/token";
+import { buildStoragePath, validatePdfFile } from "../../core/utils/file";
+import {
+  parsePagination,
+  buildPaginationMeta,
+} from "../../core/utils/pagination";
+import { NotFoundError } from "../../core/errors/NotFoundError";
+import { ForbiddenError } from "../../core/errors/ForbiddenError";
+import { AppError } from "../../core/errors/AppError";
+import { env } from "../../config/env";
+import { logger } from "../../app";
 
-// Plain DTO used in service (qr_config already parsed by controller)
 export interface UploadCertificateDto {
   event_id: string;
   recipient_name: string;
@@ -25,7 +40,7 @@ export interface SingleUploadResult {
 
 export interface BulkUploadFileResult {
   file: string;
-  status: 'success' | 'failed';
+  status: "success" | "failed";
   certificateNumber?: string;
   error?: string;
 }
@@ -44,18 +59,16 @@ export class CertificateService {
   ) {}
 
   /**
-   * Full certificate upload + generation flow:
-   * 1. Validate PDF
-   * 2. Assert event ownership
-   * 3. Calculate SHA-256 hash
-   * 4. Create DB record
-   * 5. Upload original PDF to Storage
-   * 6. Generate QR-embedded PDF
-   * 7. Upload generated PDF to Storage
-   * 8. Update DB with file paths and hash
-   *
-   * Compensating cleanup: if steps 5-8 fail, the DB record is marked for cleanup.
-   * Storage and DB are not in the same ACID transaction — this is documented.
+   * Alur unggah + generasi sertifikat:
+   * 1. Validasi berkas PDF
+   * 2. Verifikasi kepemilikan agenda event
+   * 3. Buat nomor sertifikat & token unik QR
+   * 4. Buat baris data di tabel certificates
+   * 5. Unggah PDF asli ke storage bucket original
+   * 6. Sematkan stempel QR ke PDF -> menghasilkan generatedPdfBuffer
+   * 7. Hitung hash SHA-256 dari berkas final generatedPdfBuffer
+   * 8. Unggah PDF final ke storage bucket generated
+   * 9. Perbarui database dengan path berkas, hash berkas final, dan konfigurasi QR
    */
   async uploadCertificate(
     userId: string,
@@ -63,23 +76,25 @@ export class CertificateService {
     file: Express.Multer.File,
     verifyBaseUrl: string,
   ): Promise<SingleUploadResult> {
-    // 1. Validate PDF
-    const validation = validatePdfFile(file.originalname, file.mimetype, file.buffer, env.MAX_FILE_SIZE);
+    // 1. Validasi berkas PDF
+    const validation = validatePdfFile(
+      file.originalname,
+      file.mimetype,
+      file.buffer,
+      env.MAX_FILE_SIZE,
+    );
     if (!validation.valid) {
-      throw new AppError(validation.error!, 400, 'INVALID_FILE');
+      throw new AppError(validation.error!, 400, "INVALID_FILE");
     }
 
-    // 2. Assert event ownership
+    // 2. Verifikasi kepemilikan agenda event
     await this.eventService.assertEventOwnership(dto.event_id, userId);
 
-    // 3. Calculate SHA-256
-    const fileHash = sha256(file.buffer);
-
-    // 4. Generate tokens
+    // 3. Buat token dan nomor sertifikat unik
     const certificateNumber = generateCertificateNumber();
-    const qrToken = generateSecureToken(32); // 64-char hex
+    const qrToken = generateSecureToken(32); // 64-karakter hex
 
-    // 5. Create DB record first (get the certificate ID)
+    // 4. Buat entitas awal sertifikat di DB
     const certificate = await this.certRepository.create({
       event_id: dto.event_id,
       certificate_number: certificateNumber,
@@ -88,19 +103,29 @@ export class CertificateService {
       qr_config: dto.qr_config as QrConfig | undefined,
     });
 
-    const originalPath = buildStoragePath(userId, dto.event_id, certificate.id, 'original');
-    const generatedPath = buildStoragePath(userId, dto.event_id, certificate.id, 'generated');
+    const originalPath = buildStoragePath(
+      userId,
+      dto.event_id,
+      certificate.id,
+      "original",
+    );
+    const generatedPath = buildStoragePath(
+      userId,
+      dto.event_id,
+      certificate.id,
+      "generated",
+    );
 
     try {
-      // 6. Upload original PDF
+      // 5. Unggah berkas asli ke bucket original
       await this.certRepository.uploadFile(
         env.SUPABASE_STORAGE_BUCKET_ORIGINAL,
         originalPath,
         file.buffer,
-        'application/pdf',
+        "application/pdf",
       );
 
-      // 7. Generate QR-embedded PDF
+      // 6. Sematkan stempel QR ke dalam lembar PDF
       const { generatedPdfBuffer, appliedConfig } = await embedQrCodeInPdf({
         pdfBuffer: file.buffer,
         certificateNumber,
@@ -109,44 +134,50 @@ export class CertificateService {
         qrConfig: dto.qr_config as QrConfig | undefined,
       });
 
-      // 8. Upload generated PDF
+      // 7. Hitung hash SHA-256 dari berkas final bertanda barcode
+      const generatedFileHash = sha256(generatedPdfBuffer);
+
+      // 8. Unggah berkas final ke bucket generated
       await this.certRepository.uploadFile(
         env.SUPABASE_STORAGE_BUCKET_GENERATED,
         generatedPath,
         generatedPdfBuffer,
-        'application/pdf',
+        "application/pdf",
       );
 
-      // 9. Update DB with file paths, hash, and applied QR config
+      // 9. Simpan path berkas dan hash berkas final ke database
       await this.certRepository.updateFileInfo(certificate.id, {
         original_file: originalPath,
         generated_file: generatedPath,
-        file_hash: fileHash,
+        file_hash: generatedFileHash,
         qr_config: appliedConfig,
       });
 
-      logger.info({ certificateId: certificate.id, certificateNumber }, 'Certificate uploaded and generated');
+      logger.info(
+        { certificateId: certificate.id, certificateNumber },
+        "Certificate uploaded and generated",
+      );
 
-      // Return with event join
       const full = await this.certRepository.findById(certificate.id);
       return { certificate: full! };
     } catch (err) {
-      // Compensating cleanup — remove any files already uploaded
-      logger.error({ certificateId: certificate.id, err }, 'Certificate upload failed, cleaning up');
-      await this.certRepository.deleteFile(env.SUPABASE_STORAGE_BUCKET_ORIGINAL, originalPath).catch(() => {});
-      await this.certRepository.deleteFile(env.SUPABASE_STORAGE_BUCKET_GENERATED, generatedPath).catch(() => {});
-      // Remove the DB record (it has no file links — useless)
-      // Note: No cascade delete available here; we delete directly
-      const { supabase } = await import('../../config/supabase');
-      await supabase.from('certificates').delete().eq('id', certificate.id);
+      logger.error(
+        { certificateId: certificate.id, err },
+        "Certificate upload failed, cleaning up",
+      );
+      await this.certRepository
+        .deleteFile(env.SUPABASE_STORAGE_BUCKET_ORIGINAL, originalPath)
+        .catch(() => {});
+      await this.certRepository
+        .deleteFile(env.SUPABASE_STORAGE_BUCKET_GENERATED, generatedPath)
+        .catch(() => {});
+
+      const { supabase } = await import("../../config/supabase");
+      await supabase.from("certificates").delete().eq("id", certificate.id);
       throw err;
     }
   }
 
-  /**
-   * Bulk upload — processes each file independently.
-   * One failure does NOT stop other files.
-   */
   async bulkUploadCertificates(
     userId: string,
     eventId: string,
@@ -158,40 +189,40 @@ export class CertificateService {
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const recipientName = recipientNames[i] ?? file.originalname.replace('.pdf', '');
+      const recipientName =
+        recipientNames[i] ?? file.originalname.replace(".pdf", "");
 
       try {
-        await this.uploadCertificate(
+        const uploadResult = await this.uploadCertificate(
           userId,
-          { event_id: eventId, recipient_name: recipientName, qr_config: undefined },
+          {
+            event_id: eventId,
+            recipient_name: recipientName,
+            qr_config: undefined,
+          },
           file,
           verifyBaseUrl,
         );
 
-        // Retrieve the created certificate number
-        const created = await this.certRepository.findAll({
-          userId,
-          page: 1,
-          limit: 1,
-          offset: 0,
-          eventId,
-        });
-
         results.push({
           file: file.originalname,
-          status: 'success',
-          certificateNumber: created.data[0]?.certificate_number,
+          status: "success",
+          certificateNumber: uploadResult.certificate.certificate_number,
         });
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        results.push({ file: file.originalname, status: 'failed', error: message });
+        const message = err instanceof Error ? err.message : "Unknown error";
+        results.push({
+          file: file.originalname,
+          status: "failed",
+          error: message,
+        });
       }
     }
 
     return {
       total: files.length,
-      successful: results.filter((r) => r.status === 'success').length,
-      failed: results.filter((r) => r.status === 'failed').length,
+      successful: results.filter((r) => r.status === "success").length,
+      failed: results.filter((r) => r.status === "failed").length,
       results,
     };
   }
@@ -210,30 +241,46 @@ export class CertificateService {
     return { data, meta: buildPaginationMeta(page, limit, total) };
   }
 
-  async getCertificateById(id: string, userId: string, isAdmin = false): Promise<CertificateWithEvent> {
+  async getCertificateById(
+    id: string,
+    userId: string,
+    isAdmin = false,
+  ): Promise<CertificateWithEvent> {
     const cert = await this.certRepository.findById(id);
-    if (!cert) throw new NotFoundError('Certificate');
+    if (!cert) throw new NotFoundError("Certificate");
 
     if (!isAdmin && cert.events.user_id !== userId) {
-      throw new ForbiddenError('You do not have access to this certificate');
+      throw new ForbiddenError("You do not have access to this certificate");
     }
 
     return cert;
   }
 
-  async downloadCertificate(id: string, userId: string, isAdmin = false): Promise<string> {
+  async downloadCertificate(
+    id: string,
+    userId: string,
+    isAdmin = false,
+  ): Promise<string> {
     const cert = await this.getCertificateById(id, userId, isAdmin);
 
     const filePath = cert.generated_file ?? cert.original_file;
     if (!filePath) {
-      throw new AppError('No file available for this certificate', 404, 'FILE_NOT_FOUND');
+      throw new AppError(
+        "No file available for this certificate",
+        404,
+        "FILE_NOT_FOUND",
+      );
     }
 
     const bucket = cert.generated_file
       ? env.SUPABASE_STORAGE_BUCKET_GENERATED
       : env.SUPABASE_STORAGE_BUCKET_ORIGINAL;
 
-    return this.certRepository.getSignedUrl(filePath, bucket, env.SIGNED_URL_EXPIRY);
+    return this.certRepository.getSignedUrl(
+      filePath,
+      bucket,
+      env.SIGNED_URL_EXPIRY,
+    );
   }
 
   async revokeCertificate(
@@ -244,26 +291,18 @@ export class CertificateService {
   ): Promise<CertificateRow> {
     const cert = await this.getCertificateById(id, userId, isAdmin);
 
-    if (cert.status === 'revoked') {
-      throw new AppError('Certificate is already revoked', 409, 'ALREADY_REVOKED');
+    if (cert.status === "revoked") {
+      throw new AppError(
+        "Certificate is already revoked",
+        409,
+        "ALREADY_REVOKED",
+      );
     }
 
-    logger.info({ certificateId: id, userId }, 'Certificate revoked');
+    logger.info({ certificateId: id, userId }, "Certificate revoked");
     return this.certRepository.revoke(id, dto.reason);
   }
 
-  /**
-   * Regenerate Certificate — MVP behavior (documented):
-   * - Certificate ID (certificate_number) is PRESERVED
-   * - QR token is PRESERVED
-   * - New PDF is generated with the same QR config
-   * - New SHA-256 hash is calculated from the new original
-   * - Old generated file is deleted from Storage
-   *
-   * Rationale: Preserving certificate_number and qr_token maintains
-   * existing links (printed QR codes, shared URLs). The new hash reflects
-   * the corrected document. This is the safest MVP approach.
-   */
   async regenerateCertificate(
     id: string,
     userId: string,
@@ -272,29 +311,42 @@ export class CertificateService {
   ): Promise<CertificateWithEvent> {
     const cert = await this.getCertificateById(id, userId);
 
-    const validation = validatePdfFile(file.originalname, file.mimetype, file.buffer, env.MAX_FILE_SIZE);
+    const validation = validatePdfFile(
+      file.originalname,
+      file.mimetype,
+      file.buffer,
+      env.MAX_FILE_SIZE,
+    );
     if (!validation.valid) {
-      throw new AppError(validation.error!, 400, 'INVALID_FILE');
+      throw new AppError(validation.error!, 400, "INVALID_FILE");
     }
 
-    const fileHash = sha256(file.buffer);
-    const originalPath = buildStoragePath(userId, cert.event_id, cert.id, 'original');
-    const generatedPath = buildStoragePath(userId, cert.event_id, cert.id, 'generated');
+    const originalPath = buildStoragePath(
+      userId,
+      cert.event_id,
+      cert.id,
+      "original",
+    );
+    const generatedPath = buildStoragePath(
+      userId,
+      cert.event_id,
+      cert.id,
+      "generated",
+    );
 
-    // Delete old generated PDF before uploading new one
     if (cert.generated_file) {
-      await this.certRepository.deleteFile(env.SUPABASE_STORAGE_BUCKET_GENERATED, generatedPath).catch(() => {});
+      await this.certRepository
+        .deleteFile(env.SUPABASE_STORAGE_BUCKET_GENERATED, generatedPath)
+        .catch(() => {});
     }
 
-    // Upload new original
     await this.certRepository.uploadFile(
       env.SUPABASE_STORAGE_BUCKET_ORIGINAL,
       originalPath,
       file.buffer,
-      'application/pdf',
+      "application/pdf",
     );
 
-    // Generate new QR-embedded PDF using existing config
     const { generatedPdfBuffer, appliedConfig } = await embedQrCodeInPdf({
       pdfBuffer: file.buffer,
       certificateNumber: cert.certificate_number,
@@ -303,29 +355,36 @@ export class CertificateService {
       qrConfig: cert.qr_config ?? undefined,
     });
 
+    const newGeneratedFileHash = sha256(generatedPdfBuffer);
+
     await this.certRepository.uploadFile(
       env.SUPABASE_STORAGE_BUCKET_GENERATED,
       generatedPath,
       generatedPdfBuffer,
-      'application/pdf',
+      "application/pdf",
     );
 
     await this.certRepository.updateFileInfo(cert.id, {
       original_file: originalPath,
       generated_file: generatedPath,
-      file_hash: fileHash,
+      file_hash: newGeneratedFileHash,
       qr_config: appliedConfig,
     });
 
-    logger.info({ certificateId: id }, 'Certificate regenerated');
+    logger.info({ certificateId: id }, "Certificate regenerated");
 
     return (await this.certRepository.findById(id))!;
   }
 
-  async saveQrConfig(certificateId: string, userId: string, config: QrConfigDto): Promise<CertificateRow> {
+  async saveQrConfig(
+    certificateId: string,
+    userId: string,
+    config: QrConfigDto,
+  ): Promise<CertificateRow> {
     const cert = await this.certRepository.findById(certificateId);
-    if (!cert) throw new NotFoundError('Certificate');
-    if (cert.events.user_id !== userId) throw new ForbiddenError('Not your certificate');
+    if (!cert) throw new NotFoundError("Certificate");
+    if (cert.events.user_id !== userId)
+      throw new ForbiddenError("Not your certificate");
 
     return this.certRepository.updateQrConfig(certificateId, {
       x: config.x,
@@ -337,11 +396,12 @@ export class CertificateService {
     });
   }
 
-  // Admin operations
   async listAllCertificates(query: ListCertificatesQuery) {
     const { page, limit, offset } = parsePagination(query.page, query.limit);
     const { data, total } = await this.certRepository.findAll({
-      page, limit, offset,
+      page,
+      limit,
+      offset,
       search: query.search,
       status: query.status,
       eventId: query.event_id,
@@ -349,9 +409,12 @@ export class CertificateService {
     return { data, meta: buildPaginationMeta(page, limit, total) };
   }
 
-  async bulkRevoke(ids: string[], reason: string): Promise<{ revoked: number }> {
+  async bulkRevoke(
+    ids: string[],
+    reason: string,
+  ): Promise<{ revoked: number }> {
     const results = await this.certRepository.bulkRevoke(ids, reason);
-    logger.info({ count: results.length, reason }, 'Bulk revoke performed');
+    logger.info({ count: results.length, reason }, "Bulk revoke performed");
     return { revoked: results.length };
   }
 }
