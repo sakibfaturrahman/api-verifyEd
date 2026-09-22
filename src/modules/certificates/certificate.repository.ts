@@ -1,3 +1,4 @@
+import { logger } from "@core/utils/logger";
 import { supabase } from "../../config/supabase";
 import { QrConfig } from "./certificate.validation";
 
@@ -45,6 +46,15 @@ export class CertificateRepository {
 
     if (error) throw error;
     return row as CertificateRow;
+  }
+
+  async delete(id: string): Promise<void> {
+    const { error } = await supabase.from("certificates").delete().eq("id", id);
+
+    if (error) {
+      logger.error({ error, id }, "failed to delete certificate from database");
+      throw error;
+    }
   }
 
   async updateFileInfo(

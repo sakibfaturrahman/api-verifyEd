@@ -1,20 +1,20 @@
-import { Request, Response, NextFunction } from 'express';
-import { CertificateService } from './certificate.service';
-import { successResponse } from '../../core/utils/response';
-import { AppError } from '../../core/errors/AppError';
-import { parseSchema } from '../../core/middleware/validation.middleware';
+import { Request, Response, NextFunction } from "express";
+import { CertificateService } from "./certificate.service";
+import { successResponse } from "../../core/utils/response";
+import { AppError } from "../../core/errors/AppError";
+import { parseSchema } from "../../core/middleware/validation.middleware";
 import {
   revokeCertificateSchema,
   qrConfigSchema,
   listCertificatesQuerySchema,
   QrConfig,
-} from './certificate.validation';
-import { z } from 'zod';
+} from "./certificate.validation";
+import { z } from "zod";
 
 // Inline schema for upload that accepts qr_config as a JSON string (multipart form)
 const uploadCertificateBodySchema = z.object({
-  event_id: z.string().uuid('event_id must be a valid UUID'),
-  recipient_name: z.string().min(1, 'Recipient name is required').max(255),
+  event_id: z.string().uuid("event_id must be a valid UUID"),
+  recipient_name: z.string().min(1, "Recipient name is required").max(255),
   qr_config: z.string().optional(),
 });
 
@@ -28,14 +28,14 @@ function parseQrConfig(raw: string | undefined): QrConfig | undefined {
 }
 
 function toStr(val: unknown): string | undefined {
-  return typeof val === 'string' ? val : undefined;
+  return typeof val === "string" ? val : undefined;
 }
 
 export class CertificateController {
   constructor(private readonly certService: CertificateService) {}
 
   private getVerifyBaseUrl(req: Request): string {
-    return `${req.protocol}://${req.get('host')}`;
+    return `${req.protocol}://${req.get("host")}`;
   }
 
   /**
@@ -66,11 +66,23 @@ export class CertificateController {
    *       200:
    *         description: Paginated certificate list
    */
-  list = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  list = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
       const query = parseSchema(listCertificatesQuerySchema, req.query);
-      const result = await this.certService.listCertificates(req.user!.id, query);
-      successResponse({ res, message: 'Certificates retrieved successfully', data: result.data, meta: result.meta });
+      const result = await this.certService.listCertificates(
+        req.user!.id,
+        query,
+      );
+      successResponse({
+        res,
+        message: "Certificates retrieved successfully",
+        data: result.data,
+        meta: result.meta,
+      });
     } catch (err) {
       next(err);
     }
@@ -95,10 +107,21 @@ export class CertificateController {
    *       404:
    *         description: Certificate not found
    */
-  getById = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  getById = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
-      const cert = await this.certService.getCertificateById(req.params.id, req.user!.id);
-      successResponse({ res, message: 'Certificate retrieved successfully', data: cert });
+      const cert = await this.certService.getCertificateById(
+        req.params.id,
+        req.user!.id,
+      );
+      successResponse({
+        res,
+        message: "Certificate retrieved successfully",
+        data: cert,
+      });
     } catch (err) {
       next(err);
     }
@@ -130,20 +153,33 @@ export class CertificateController {
    *       201:
    *         description: Certificate uploaded and generated
    */
-  upload = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  upload = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
       if (!req.file) {
-        throw new AppError('PDF file is required', 400, 'FILE_REQUIRED');
+        throw new AppError("PDF file is required", 400, "FILE_REQUIRED");
       }
       const body = parseSchema(uploadCertificateBodySchema, req.body);
       const qrConfig = parseQrConfig(body.qr_config);
       const result = await this.certService.uploadCertificate(
         req.user!.id,
-        { event_id: body.event_id, recipient_name: body.recipient_name, qr_config: qrConfig },
+        {
+          event_id: body.event_id,
+          recipient_name: body.recipient_name,
+          qr_config: qrConfig,
+        },
         req.file,
         this.getVerifyBaseUrl(req),
       );
-      successResponse({ res, message: 'Certificate uploaded and generated successfully', data: result.certificate, statusCode: 201 });
+      successResponse({
+        res,
+        message: "Certificate uploaded and generated successfully",
+        data: result.certificate,
+        statusCode: 201,
+      });
     } catch (err) {
       next(err);
     }
@@ -176,21 +212,29 @@ export class CertificateController {
    *       207:
    *         description: Multi-status bulk upload result
    */
-  bulkUpload = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  bulkUpload = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
       const files = req.files as Express.Multer.File[];
       if (!files || files.length === 0) {
-        throw new AppError('At least one PDF file is required', 400, 'FILES_REQUIRED');
+        throw new AppError(
+          "At least one PDF file is required",
+          400,
+          "FILES_REQUIRED",
+        );
       }
 
       const eventId = toStr(req.body.event_id);
       if (!eventId) {
-        throw new AppError('event_id is required', 400, 'EVENT_ID_REQUIRED');
+        throw new AppError("event_id is required", 400, "EVENT_ID_REQUIRED");
       }
 
       let recipientNames: string[] = [];
       const rawNames = req.body.recipient_names;
-      if (typeof rawNames === 'string') {
+      if (typeof rawNames === "string") {
         try {
           recipientNames = JSON.parse(rawNames) as string[];
         } catch {
@@ -206,8 +250,18 @@ export class CertificateController {
         this.getVerifyBaseUrl(req),
       );
 
-      const statusCode = result.failed > 0 && result.successful > 0 ? 207 : result.failed > 0 ? 400 : 201;
-      successResponse({ res, message: 'Bulk upload completed', data: result, statusCode });
+      const statusCode =
+        result.failed > 0 && result.successful > 0
+          ? 207
+          : result.failed > 0
+            ? 400
+            : 201;
+      successResponse({
+        res,
+        message: "Bulk upload completed",
+        data: result,
+        statusCode,
+      });
     } catch (err) {
       next(err);
     }
@@ -230,10 +284,21 @@ export class CertificateController {
    *       200:
    *         description: Signed download URL (1 hour expiry)
    */
-  download = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  download = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
-      const signedUrl = await this.certService.downloadCertificate(req.params.id, req.user!.id);
-      successResponse({ res, message: 'Download URL generated', data: { url: signedUrl, expiresIn: 3600 } });
+      const signedUrl = await this.certService.downloadCertificate(
+        req.params.id,
+        req.user!.id,
+      );
+      successResponse({
+        res,
+        message: "Download URL generated",
+        data: { url: signedUrl, expiresIn: 3600 },
+      });
     } catch (err) {
       next(err);
     }
@@ -267,11 +332,23 @@ export class CertificateController {
    *       409:
    *         description: Already revoked
    */
-  revoke = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  revoke = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
       const dto = parseSchema(revokeCertificateSchema, req.body);
-      const cert = await this.certService.revokeCertificate(req.params.id, req.user!.id, dto);
-      successResponse({ res, message: 'Certificate revoked successfully', data: cert });
+      const cert = await this.certService.revokeCertificate(
+        req.params.id,
+        req.user!.id,
+        dto,
+      );
+      successResponse({
+        res,
+        message: "Certificate revoked successfully",
+        data: cert,
+      });
     } catch (err) {
       next(err);
     }
@@ -299,10 +376,14 @@ export class CertificateController {
    *       200:
    *         description: Certificate regenerated
    */
-  regenerate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  regenerate = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
       if (!req.file) {
-        throw new AppError('PDF file is required', 400, 'FILE_REQUIRED');
+        throw new AppError("PDF file is required", 400, "FILE_REQUIRED");
       }
       const cert = await this.certService.regenerateCertificate(
         req.params.id,
@@ -310,7 +391,11 @@ export class CertificateController {
         req.file,
         this.getVerifyBaseUrl(req),
       );
-      successResponse({ res, message: 'Certificate regenerated successfully', data: cert });
+      successResponse({
+        res,
+        message: "Certificate regenerated successfully",
+        data: cert,
+      });
     } catch (err) {
       next(err);
     }
@@ -343,13 +428,44 @@ export class CertificateController {
    *       200:
    *         description: QR config saved
    */
-  saveQrConfig = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  saveQrConfig = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
       const raw = parseSchema(qrConfigSchema, req.body);
       // Ensure defaults are applied
       const dto = { ...raw, page: raw.page ?? 1, rotation: raw.rotation ?? 0 };
-      const cert = await this.certService.saveQrConfig(dto.certificate_id, req.user!.id, dto);
-      successResponse({ res, message: 'QR configuration saved successfully', data: cert });
+      const cert = await this.certService.saveQrConfig(
+        dto.certificate_id,
+        req.user!.id,
+        dto,
+      );
+      successResponse({
+        res,
+        message: "QR configuration saved successfully",
+        data: cert,
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  // penanganan permintaan hapus sertifikat
+  delete = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
+    try {
+      const isAdmin = req.user?.role === "admin";
+      await this.certService.deleteCertificate(
+        req.params.id,
+        req.user!.id,
+        isAdmin,
+      );
+      successResponse({ res, message: "Certificate deleted successfully" });
     } catch (err) {
       next(err);
     }
