@@ -4,6 +4,7 @@ import {
   CertificateWithEvent,
 } from "../certificates/certificate.repository";
 import { VerificationRepository } from "./verification.repository";
+import { NotificationService } from "../notifications/notification.service";
 import { sha256, compareHashes } from "../../core/utils/hash";
 import { validatePdfFile } from "../../core/utils/file";
 import { env } from "../../config/env";
@@ -25,9 +26,7 @@ export interface VerificationResult {
   };
 }
 
-/**
- * Format data sertifikat publik yang aman tanpa mengekspos ID internal atau path berkas.
- */
+// format data sertifikat publik yang aman tanpa mengekspos id internal atau path berkas
 function formatPublicCertificate(
   cert: CertificateWithEvent,
   documentIntegrity: "valid" | "invalid" | "not_checked",
@@ -48,6 +47,7 @@ export class VerificationService {
   constructor(
     private readonly certRepository: CertificateRepository,
     private readonly verificationRepository: VerificationRepository,
+    private readonly notificationService: NotificationService,
   ) {}
 
   async verifyByCertificateNumber(
@@ -63,6 +63,14 @@ export class VerificationService {
         ip_address: meta.ip,
         user_agent: meta.userAgent,
       });
+
+      // periksa potensi aktivitas brute force dari alamat ip
+      if (meta.ip) {
+        this.notificationService
+          .checkAndNotifyRateLimitAbuse(meta.ip)
+          .catch(() => {});
+      }
+
       return { status: "not_found" };
     }
 
@@ -76,6 +84,23 @@ export class VerificationService {
       ip_address: meta.ip,
       user_agent: meta.userAgent,
     });
+
+    // picu notifikasi jika sertifikat yang diakses berstatus dicabut
+    if (result === "revoked") {
+      await this.notificationService.notifyRevokedAccess({
+        certificateNumber: cert.certificate_number,
+        recipientName: cert.recipient_name,
+        revokeReason: cert.revoke_reason ?? undefined,
+        ip: meta.ip,
+      });
+    }
+
+    // periksa potensi aktivitas brute force dari alamat ip
+    if (meta.ip) {
+      this.notificationService
+        .checkAndNotifyRateLimitAbuse(meta.ip)
+        .catch(() => {});
+    }
 
     return {
       status: result,
@@ -96,6 +121,14 @@ export class VerificationService {
         ip_address: meta.ip,
         user_agent: meta.userAgent,
       });
+
+      // periksa potensi aktivitas brute force dari alamat ip
+      if (meta.ip) {
+        this.notificationService
+          .checkAndNotifyRateLimitAbuse(meta.ip)
+          .catch(() => {});
+      }
+
       return { status: "not_found" };
     }
 
@@ -109,6 +142,23 @@ export class VerificationService {
       ip_address: meta.ip,
       user_agent: meta.userAgent,
     });
+
+    // picu notifikasi jika sertifikat yang diakses berstatus dicabut
+    if (result === "revoked") {
+      await this.notificationService.notifyRevokedAccess({
+        certificateNumber: cert.certificate_number,
+        recipientName: cert.recipient_name,
+        revokeReason: cert.revoke_reason ?? undefined,
+        ip: meta.ip,
+      });
+    }
+
+    // periksa potensi aktivitas brute force dari alamat ip
+    if (meta.ip) {
+      this.notificationService
+        .checkAndNotifyRateLimitAbuse(meta.ip)
+        .catch(() => {});
+    }
 
     return {
       status: result,
@@ -154,6 +204,20 @@ export class VerificationService {
               user_agent: meta.userAgent,
             });
 
+            // picu notifikasi peringatan pemalsuan dokumen karena nomor valid tetapi hash tidak cocok
+            await this.notificationService.notifyTamperedDocument({
+              certificateNumber: certNumber,
+              recipientName: foundByNumber.recipient_name,
+              ip: meta.ip,
+            });
+
+            // periksa potensi aktivitas brute force dari alamat ip
+            if (meta.ip) {
+              this.notificationService
+                .checkAndNotifyRateLimitAbuse(meta.ip)
+                .catch(() => {});
+            }
+
             return {
               status: "not_found",
               certificate: formatPublicCertificate(foundByNumber, "invalid"),
@@ -161,7 +225,7 @@ export class VerificationService {
           }
         }
       } catch {
-        // Abaikan jika berkas tidak memiliki info metadata valid
+        // abaikan jika berkas tidak memiliki info metadata valid
       }
 
       await this.verificationRepository.createLog({
@@ -170,6 +234,13 @@ export class VerificationService {
         ip_address: meta.ip,
         user_agent: meta.userAgent,
       });
+
+      // periksa potensi aktivitas brute force dari alamat ip
+      if (meta.ip) {
+        this.notificationService
+          .checkAndNotifyRateLimitAbuse(meta.ip)
+          .catch(() => {});
+      }
 
       return { status: "not_found" };
     }
@@ -183,6 +254,21 @@ export class VerificationService {
         ip_address: meta.ip,
         user_agent: meta.userAgent,
       });
+
+      // picu notifikasi peringatan pemalsuan dokumen jika perbandingan hash gagal
+      await this.notificationService.notifyTamperedDocument({
+        certificateNumber: cert.certificate_number,
+        recipientName: cert.recipient_name,
+        ip: meta.ip,
+      });
+
+      // periksa potensi aktivitas brute force dari alamat ip
+      if (meta.ip) {
+        this.notificationService
+          .checkAndNotifyRateLimitAbuse(meta.ip)
+          .catch(() => {});
+      }
+
       return {
         status: "not_found",
         certificate: formatPublicCertificate(cert, "invalid"),
@@ -199,6 +285,23 @@ export class VerificationService {
       ip_address: meta.ip,
       user_agent: meta.userAgent,
     });
+
+    // picu notifikasi jika sertifikat yang diakses berstatus dicabut
+    if (result === "revoked") {
+      await this.notificationService.notifyRevokedAccess({
+        certificateNumber: cert.certificate_number,
+        recipientName: cert.recipient_name,
+        revokeReason: cert.revoke_reason ?? undefined,
+        ip: meta.ip,
+      });
+    }
+
+    // periksa potensi aktivitas brute force dari alamat ip
+    if (meta.ip) {
+      this.notificationService
+        .checkAndNotifyRateLimitAbuse(meta.ip)
+        .catch(() => {});
+    }
 
     return {
       status: result,

@@ -3,6 +3,8 @@ import multer from "multer";
 import { VerificationController } from "./verification.controller";
 import { VerificationService } from "./verification.service";
 import { VerificationRepository } from "./verification.repository";
+import { NotificationRepository } from "../notifications/notification.repository";
+import { NotificationService } from "../notifications/notification.service";
 import { verifyRateLimit } from "../../core/middleware/rateLimit.middleware";
 import {
   authenticate,
@@ -25,14 +27,22 @@ const upload = multer({
   },
 });
 
+// inisialisasi dependensi service
 const verificationRepository = new VerificationRepository();
+const notificationRepository = new NotificationRepository();
+export const notificationService = new NotificationService(
+  notificationRepository,
+);
+
 export const verificationService = new VerificationService(
   certRepository,
   verificationRepository,
+  notificationService,
 );
+
 const verificationController = new VerificationController(verificationService);
 
-// Alternatif path jika router ini sudah di-mount di /api/v1/admin
+// rute log verifikasi untuk admin
 router.get(
   "/verification-logs",
   authenticate,
@@ -40,10 +50,10 @@ router.get(
   verificationController.getVerificationLogs,
 );
 
-// Terapkan rate limit ketat hanya untuk endpoint verifikasi publik di bawahnya
+// pembatasan laju akses untuk endpoint publik
 router.use(verifyRateLimit);
 
-// Public — Tidak butuh autentikasi
+// endpoint publik verifikasi sertifikat
 router.get(
   "/certificate/:certificateNumber",
   verificationController.verifyByCertificateNumber,
