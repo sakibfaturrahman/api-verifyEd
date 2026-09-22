@@ -32,14 +32,6 @@ export const verificationService = new VerificationService(
 );
 const verificationController = new VerificationController(verificationService);
 
-// Admin Endpoint — Diperlukan Autentikasi Admin (Ditaruh sebelum rate limiter publik)
-router.get(
-  "/admin/verification-logs",
-  authenticate,
-  requireRole(["admin"]),
-  verificationController.getVerificationLogs,
-);
-
 // Alternatif path jika router ini sudah di-mount di /api/v1/admin
 router.get(
   "/verification-logs",

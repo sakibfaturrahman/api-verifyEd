@@ -1,4 +1,3 @@
-// src/modules/verification/verification.service.ts
 import { PDFDocument } from "pdf-lib";
 import {
   CertificateRepository,
@@ -121,7 +120,6 @@ export class VerificationService {
     file: Express.Multer.File,
     meta: { ip?: string; userAgent?: string },
   ): Promise<VerificationResult> {
-    // 1. Validasi jenis dan ukuran berkas PDF
     const validation = validatePdfFile(
       file.originalname,
       file.mimetype,
@@ -132,19 +130,15 @@ export class VerificationService {
       throw new AppError(validation.error!, 400, "INVALID_FILE");
     }
 
-    // 2. Hitung hash SHA-256 dari berkas yang diunggah
     const uploadedHash = sha256(file.buffer);
-
-    // 3. Cocokkan langsung berdasarkan hash SHA-256 berkas
     let cert = await this.certRepository.findByHash(uploadedHash);
 
-    // 4. Jika hash biner tidak cocok, periksa metadata Title sertifikat
     if (!cert) {
       try {
         const pdfDoc = await PDFDocument.load(file.buffer, {
           ignoreEncryption: true,
         });
-        const title = pdfDoc.getTitle(); // Format: "Certificate: CERT-XXXX"
+        const title = pdfDoc.getTitle();
 
         if (title && title.includes("Certificate: ")) {
           const certNumber = title.replace("Certificate: ", "").trim();
@@ -152,7 +146,6 @@ export class VerificationService {
             await this.certRepository.findByNumber(certNumber);
 
           if (foundByNumber) {
-            // Nomor seri terdaftar di sistem, namun hash berbeda (berkas telah diedit/dipalsukan)
             await this.verificationRepository.createLog({
               certificate_id: foundByNumber.id,
               method: "pdf",
@@ -168,10 +161,9 @@ export class VerificationService {
           }
         }
       } catch {
-        // Lanjutkan jika berkas tidak memiliki info metadata valid
+        // Abaikan jika berkas tidak memiliki info metadata valid
       }
 
-      // Berkas tidak cocok dengan hash dan tidak terdaftar di sistem
       await this.verificationRepository.createLog({
         method: "pdf",
         result: "not_found",
@@ -182,7 +174,6 @@ export class VerificationService {
       return { status: "not_found" };
     }
 
-    // 5. Validasi sekunder timing-safe comparison
     const hashMatch = compareHashes(uploadedHash, cert.file_hash ?? "");
     if (!hashMatch) {
       await this.verificationRepository.createLog({

@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { VerificationService } from "./verification.service";
+import type { VerificationService } from "./verification.service";
 import { successResponse } from "../../core/utils/response";
 import { AppError } from "../../core/errors/AppError";
 
@@ -137,11 +137,20 @@ export class VerificationController {
     }
   };
 
+  /**
+   * @openapi
+   * /api/v1/admin/verification-logs:
+   *   get:
+   *     tags: [Admin, Verification]
+   *     summary: Get all verification logs
+   *     security:
+   *       - bearerAuth: []
+   */
   getVerificationLogs = async (
     req: Request,
     res: Response,
     next: NextFunction,
-  ) => {
+  ): Promise<void> => {
     try {
       const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
       const limit = req.query.limit
