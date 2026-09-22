@@ -1,4 +1,4 @@
-import { logger } from "@core/utils/logger";
+import { logger } from "../../core/utils/logger";
 import { supabase } from "../../config/supabase";
 import { QrConfig } from "./certificate.validation";
 
