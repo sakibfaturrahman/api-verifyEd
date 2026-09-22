@@ -214,4 +214,8 @@ export class VerificationService {
       certificate: formatPublicCertificate(cert, "valid"),
     };
   }
+
+  async getVerificationLogs(query: { page?: number; limit?: number }) {
+    return this.verificationRepository.getLogs(query);
+  }
 }

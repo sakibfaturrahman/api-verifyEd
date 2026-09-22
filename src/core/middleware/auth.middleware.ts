@@ -1,13 +1,13 @@
-import { Request, Response, NextFunction } from 'express';
-import { supabaseAnon, supabase } from '../../config/supabase';
-import { UnauthorizedError } from '../errors/UnauthorizedError';
-import { AppError } from '../errors/AppError';
+import { Request, Response, NextFunction } from "express";
+import { supabaseAnon, supabase } from "../../config/supabase";
+import { UnauthorizedError } from "../errors/UnauthorizedError";
+import { AppError } from "../errors/AppError";
 
 export interface AuthenticatedUser {
   id: string;
   email: string;
-  role: 'admin' | 'user';
-  status: 'active' | 'inactive';
+  role: "admin" | "user";
+  status: "active" | "inactive";
 }
 
 // Extend Express Request type to carry the authenticated user
@@ -33,44 +33,73 @@ export async function authenticate(
   try {
     const authHeader = req.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      throw new UnauthorizedError('Missing or malformed Authorization header');
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      throw new UnauthorizedError("Missing or malformed Authorization header");
     }
 
     const token = authHeader.slice(7); // Remove "Bearer "
 
     // Validate the JWT against Supabase Auth
-    const { data: authData, error: authError } = await supabaseAnon.auth.getUser(token);
+    const { data: authData, error: authError } =
+      await supabaseAnon.auth.getUser(token);
 
     if (authError || !authData.user) {
-      throw new UnauthorizedError('Invalid or expired access token');
+      throw new UnauthorizedError("Invalid or expired access token");
     }
 
     // Fetch the profile from public.profiles
     const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('id, email, role, status')
-      .eq('id', authData.user.id)
+      .from("profiles")
+      .select("id, email, role, status")
+      .eq("id", authData.user.id)
       .single();
 
     if (profileError || !profile) {
-      throw new UnauthorizedError('User profile not found');
+      throw new UnauthorizedError("User profile not found");
     }
 
     // Block inactive accounts
-    if (profile.status === 'inactive') {
-      throw new AppError('Account is deactivated. Please contact support.', 403, 'ACCOUNT_INACTIVE');
+    if (profile.status === "inactive") {
+      throw new AppError(
+        "Account is deactivated. Please contact support.",
+        403,
+        "ACCOUNT_INACTIVE",
+      );
     }
 
     req.user = {
       id: profile.id as string,
       email: profile.email as string,
-      role: profile.role as 'admin' | 'user',
-      status: profile.status as 'active' | 'inactive',
+      role: profile.role as "admin" | "user",
+      status: profile.status as "active" | "inactive",
     };
 
     next();
   } catch (err) {
     next(err);
   }
+}
+
+/**
+ * Middleware untuk membatasi akses endpoint berdasarkan role pengguna.
+ * Wajib dipasang setelah middleware `authenticate`.
+ */
+export function requireRole(allowedRoles: ("admin" | "user")[]) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    if (!req.user) {
+      return next(new UnauthorizedError("Authentication required"));
+    }
+
+    if (!allowedRoles.includes(req.user.role)) {
+      return next(
+        new AppError(
+          "Forbidden: You do not have permission to access this resource",
+          403,
+          "FORBIDDEN",
+        ),
+      );
+    }
+
+    next();
+  };
 }

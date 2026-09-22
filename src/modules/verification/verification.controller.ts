@@ -1,7 +1,7 @@
-import { Request, Response, NextFunction } from 'express';
-import { VerificationService } from './verification.service';
-import { successResponse } from '../../core/utils/response';
-import { AppError } from '../../core/errors/AppError';
+import { Request, Response, NextFunction } from "express";
+import { VerificationService } from "./verification.service";
+import { successResponse } from "../../core/utils/response";
+import { AppError } from "../../core/errors/AppError";
 
 export class VerificationController {
   constructor(private readonly verificationService: VerificationService) {}
@@ -9,7 +9,7 @@ export class VerificationController {
   private getMeta(req: Request) {
     return {
       ip: req.ip ?? req.socket.remoteAddress,
-      userAgent: req.get('user-agent'),
+      userAgent: req.get("user-agent"),
     };
   }
 
@@ -44,7 +44,7 @@ export class VerificationController {
         String(req.params.certificateNumber),
         this.getMeta(req),
       );
-      successResponse({ res, message: 'Verification complete', data: result });
+      successResponse({ res, message: "Verification complete", data: result });
     } catch (err) {
       next(err);
     }
@@ -70,13 +70,17 @@ export class VerificationController {
    *             schema:
    *               $ref: '#/components/schemas/VerificationResult'
    */
-  verifyByQr = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  verifyByQr = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
       const result = await this.verificationService.verifyByQrToken(
         String(req.params.qrToken),
         this.getMeta(req),
       );
-      successResponse({ res, message: 'Verification complete', data: result });
+      successResponse({ res, message: "Verification complete", data: result });
     } catch (err) {
       next(err);
     }
@@ -114,15 +118,47 @@ export class VerificationController {
    *       400:
    *         description: Invalid file (not a PDF or corrupted)
    */
-  verifyByPdf = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  verifyByPdf = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
       if (!req.file) {
-        throw new AppError('PDF file is required', 400, 'FILE_REQUIRED');
+        throw new AppError("PDF file is required", 400, "FILE_REQUIRED");
       }
-      const result = await this.verificationService.verifyByPdf(req.file, this.getMeta(req));
-      successResponse({ res, message: 'Verification complete', data: result });
+      const result = await this.verificationService.verifyByPdf(
+        req.file,
+        this.getMeta(req),
+      );
+      successResponse({ res, message: "Verification complete", data: result });
     } catch (err) {
       next(err);
+    }
+  };
+
+  getVerificationLogs = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => {
+    try {
+      const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
+      const limit = req.query.limit
+        ? parseInt(req.query.limit as string, 10)
+        : 10;
+
+      const result = await this.verificationService.getVerificationLogs({
+        page,
+        limit,
+      });
+
+      res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
     }
   };
 }
