@@ -13,16 +13,12 @@ import apiRouter from "./routes/index";
 
 import { logger } from "./core/utils/logger";
 
-// Structured Logger
 export { logger };
 
-// Express App
 const app = express();
 
-// CDN URL resmi Swagger UI
 const SWAGGER_CDN = "https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.11.0";
 
-// Security headers (izinkan CDN untuk Swagger UI)
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -40,28 +36,51 @@ app.use(
   }),
 );
 
-// CORS
-const allowedOrigins = env.CORS_ORIGIN.split(",").map((o) => o.trim());
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error(`CORS: origin '${origin}' not allowed`));
-      }
-    },
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
-  }),
-);
+// daftar origin yang diizinkan
+const configuredOrigins = (env.CORS_ORIGIN || "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
 
-// Request parsing
+// selalu izinkan localhost pada mode pengembangan atau jika list kosong
+const allowedOrigins = [
+  ...configuredOrigins,
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+];
+
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    // izinkan permintaan tanpa header origin (seperti curl, mobile app, postman)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      logger.warn({ origin, allowedOrigins }, "cors blocked origin");
+      callback(null, false);
+    }
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+    "Accept",
+  ],
+  credentials: true,
+  optionsSuccessStatus: 200,
+};
+
+// pasang middleware cors dan tangani preflight options ke seluruh rute
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
+
+// parsing payload request
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
-// HTTP request logging
+// pencatatan log request http
 app.use(
   pinoHttp({
     logger,
@@ -74,10 +93,10 @@ app.use(
   }),
 );
 
-// Global rate limit
+// pembatasan laju global
 app.use("/api", apiRateLimit);
 
-// Health Check
+// pemeriksaan kesehatan server
 app.get("/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
@@ -99,7 +118,7 @@ app.get("/health/database", async (_req: Request, res: Response) => {
   });
 });
 
-// Swagger UI via CDN (Serverless Compatible)
+// dokumentasi swagger ui
 app.use(
   "/api/docs",
   swaggerUi.serveFiles(swaggerSpec, {
@@ -124,16 +143,15 @@ app.use(
   }),
 );
 
-// Expose raw OpenAPI JSON spec
 app.get("/api/docs.json", (_req: Request, res: Response) => {
   res.setHeader("Content-Type", "application/json");
   res.send(swaggerSpec);
 });
 
-// API Routes
+// rute utama api
 app.use("/api/v1", apiRouter);
 
-// 404 Handler
+// penanganan 404
 app.use((_req: Request, res: Response) => {
   res.status(404).json({
     success: false,
@@ -142,7 +160,7 @@ app.use((_req: Request, res: Response) => {
   });
 });
 
-// Centralized Error Handler
+// penanganan error terpusat
 app.use(
   errorMiddleware as (
     err: Error,
