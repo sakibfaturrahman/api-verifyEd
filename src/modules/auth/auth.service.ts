@@ -39,15 +39,35 @@ export class AuthService {
         description: dto.description,
       });
 
-      // gunakan await agar promise selesai sebelum response http dikirim
+      // ambil profil yang baru dibuat untuk mendapatkan user id bagi notifikasi selamat datang
+      const newProfile = await this.authRepository.findProfileByEmail(
+        dto.email,
+      );
+
+      // picu notifikasi selamat datang ke pengguna baru
+      if (newProfile) {
+        try {
+          await this.notificationService.notifyUserWelcome(
+            newProfile.id,
+            dto.name,
+          );
+        } catch (userNotifErr) {
+          logger.warn(
+            { userNotifErr, userId: newProfile.id },
+            "failed to create welcome notification for user",
+          );
+        }
+      }
+
+      // picu notifikasi ke admin tentang registrasi baru
       try {
         await this.notificationService.notifyNewRegistration({
           name: dto.name,
           email: dto.email,
         });
-      } catch (notifErr) {
+      } catch (adminNotifErr) {
         logger.warn(
-          { notifErr, email: dto.email },
+          { adminNotifErr, email: dto.email },
           "failed to create admin notification on register",
         );
       }
@@ -76,6 +96,7 @@ export class AuthService {
       throw err;
     }
 
+    // ambil data profil pengguna untuk pengecekan status akun
     const profile = await this.authRepository.findProfileById(
       await this.getUserIdFromToken(session.accessToken),
     );
@@ -118,6 +139,7 @@ export class AuthService {
     return profile;
   }
 
+  // ekstraksi id pengguna dari access token yang valid
   private async getUserIdFromToken(accessToken: string): Promise<string> {
     const { supabaseAnon } = await import("../../config/supabase");
     const { data } = await supabaseAnon.auth.getUser(accessToken);

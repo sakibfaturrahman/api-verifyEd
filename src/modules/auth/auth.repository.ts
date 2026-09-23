@@ -193,4 +193,16 @@ export class AuthRepository {
 
     return !!data;
   }
+
+  // cari data profil pengguna berdasarkan alamat email
+  async findProfileByEmail(email: string): Promise<ProfileRow | null> {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("email", email)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return data as ProfileRow;
+  }
 }

@@ -18,8 +18,5 @@ router.use("/certificates", certificateRouter);
 router.use("/verify", verificationRouter);
 router.use("/dashboard", dashboardRouter);
 router.use("/admin", adminRouter);
-
-// endpoint notifikasi admin terpusat: /api/v1/admin/notifications
-router.use("/admin/notifications", notificationRouter);
-
+router.use("/notifications", notificationRouter);
 export default router;
