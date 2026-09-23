@@ -12,10 +12,10 @@ const notificationController = new NotificationController(notificationService);
 
 const router = Router();
 
-// lindungi seluruh endpoint agar wajib login
+// Lindungi seluruh endpoint agar wajib login
 router.use(authenticate);
 
-// rute serbaguna untuk admin maupun user
+// Rute notifikasi untuk admin maupun user
 router.get("/", notificationController.getNotifications);
 router.patch("/:id/read", notificationController.markAsRead);
 router.patch("/read-all", notificationController.markAllAsRead);

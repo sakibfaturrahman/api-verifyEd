@@ -41,7 +41,7 @@ export interface CreateNotificationInput {
 }
 
 export class NotificationRepository {
-  // simpan notifikasi baru
+  // Simpan notifikasi baru
   async createNotification(input: CreateNotificationInput): Promise<void> {
     const { error } = await supabase.from("notifications").insert({
       user_id: input.userId ?? null,
@@ -59,7 +59,7 @@ export class NotificationRepository {
     }
   }
 
-  // ambil daftar notifikasi dengan guard role dan user id
+  // Ambil daftar notifikasi dengan guard role dan user id
   async getNotifications(params: {
     userId: string;
     role: "admin" | "user";
@@ -72,14 +72,14 @@ export class NotificationRepository {
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
+    // 1. Ambil baris notifikasi
     let query = supabase
       .from("notifications")
       .select("*", { count: "exact" })
       .order("created_at", { ascending: false });
 
-    // guard: admin melihat notifikasi admin atau global, user hanya melihat miliknya
     if (params.role === "admin") {
-      query = query.or("recipient_role.eq.admin,recipient_role.eq.all");
+      query = query.in("recipient_role", ["admin", "all"]);
     } else {
       query = query.eq("user_id", params.userId);
     }
@@ -91,25 +91,28 @@ export class NotificationRepository {
     const { data, error, count } = await query.range(from, to);
 
     if (error) {
-      logger.error({ error }, "failed to fetch notifications");
+      logger.error({ error, params }, "failed to fetch notifications");
       throw error;
     }
 
-    // hitung total unread berdasarkan guard role
+    // 2. Hitung jumlah yang belum dibaca
     let unreadQuery = supabase
       .from("notifications")
-      .select("*", { count: "exact", head: true })
+      .select("id", { count: "exact" })
       .eq("is_read", false);
 
     if (params.role === "admin") {
-      unreadQuery = unreadQuery.or(
-        "recipient_role.eq.admin,recipient_role.eq.all",
-      );
+      unreadQuery = unreadQuery.in("recipient_role", ["admin", "all"]);
     } else {
       unreadQuery = unreadQuery.eq("user_id", params.userId);
     }
 
-    const { count: unreadCount } = await unreadQuery;
+    const { count: unreadCount, error: unreadError } =
+      await unreadQuery.limit(1);
+
+    if (unreadError) {
+      logger.warn({ unreadError }, "failed to get unread count");
+    }
 
     return {
       data: (data as AppNotification[]) || [],
@@ -118,7 +121,7 @@ export class NotificationRepository {
     };
   }
 
-  // tandai satu notifikasi telah dibaca dengan verifikasi hak milik
+  // Tandai satu notifikasi telah dibaca
   async markAsRead(
     id: string,
     userId: string,
@@ -129,7 +132,6 @@ export class NotificationRepository {
       .update({ is_read: true })
       .eq("id", id);
 
-    // jika bukan admin pastikan notifikasi milik user bersangkutan
     if (!isAdmin) {
       query = query.eq("user_id", userId);
     }
@@ -141,7 +143,7 @@ export class NotificationRepository {
     }
   }
 
-  // tandai semua notifikasi telah dibaca sesuai guard role
+  // Tandai semua notifikasi telah dibaca sesuai peran
   async markAllAsRead(userId: string, isAdmin: boolean): Promise<void> {
     let query = supabase
       .from("notifications")
@@ -149,7 +151,7 @@ export class NotificationRepository {
       .eq("is_read", false);
 
     if (isAdmin) {
-      query = query.or("recipient_role.eq.admin,recipient_role.eq.all");
+      query = query.in("recipient_role", ["admin", "all"]);
     } else {
       query = query.eq("user_id", userId);
     }
@@ -161,7 +163,7 @@ export class NotificationRepository {
     }
   }
 
-  // periksa frekuensi upaya verifikasi dari ip
+  // Periksa frekuensi upaya verifikasi dari sebuah alamat IP
   async countRecentVerificationsByIp(
     ip: string,
     minutes: number = 5,
@@ -172,15 +174,19 @@ export class NotificationRepository {
 
     const { count, error } = await supabase
       .from("verification_logs")
-      .select("*", { count: "exact", head: true })
+      .select("id", { count: "exact" })
       .eq("ip_address", ip)
-      .gte("created_at", timeThreshold);
+      .gte("created_at", timeThreshold)
+      .limit(1);
 
-    if (error) return 0;
+    if (error) {
+      logger.warn({ error, ip }, "failed to count recent verifications");
+      return 0;
+    }
     return count || 0;
   }
 
-  // hitung jumlah sertifikat unik yang diakses oleh 1 ip dalam kurun waktu menit tertentu
+  // Hitung jumlah sertifikat unik yang diakses oleh 1 IP dalam kurun waktu menit tertentu
   async countUniqueCertificatesCheckedByIp(
     ip: string,
     minutes: number = 10,
@@ -189,7 +195,6 @@ export class NotificationRepository {
       Date.now() - minutes * 60 * 1000,
     ).toISOString();
 
-    // ambil log verifikasi yang berhasil menemukan sertifikat
     const { data, error } = await supabase
       .from("verification_logs")
       .select("certificate_id")
@@ -199,7 +204,6 @@ export class NotificationRepository {
 
     if (error || !data) return 0;
 
-    // hitung jumlah id sertifikat unik
     const uniqueCertIds = new Set(data.map((item) => item.certificate_id));
     return uniqueCertIds.size;
   }

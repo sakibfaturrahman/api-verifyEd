@@ -12,7 +12,7 @@ export class NotificationController {
     next: NextFunction,
   ): Promise<void> => {
     try {
-      if (!req.user) {
+      if (!req.user || !req.user.id) {
         throw new UnauthorizedError("Authentication required");
       }
 
@@ -47,7 +47,7 @@ export class NotificationController {
     next: NextFunction,
   ): Promise<void> => {
     try {
-      if (!req.user) {
+      if (!req.user || !req.user.id) {
         throw new UnauthorizedError("Authentication required");
       }
 
@@ -74,7 +74,7 @@ export class NotificationController {
     next: NextFunction,
   ): Promise<void> => {
     try {
-      if (!req.user) {
+      if (!req.user || !req.user.id) {
         throw new UnauthorizedError("Authentication required");
       }
 
