@@ -179,4 +179,28 @@ export class NotificationRepository {
     if (error) return 0;
     return count || 0;
   }
+
+  // hitung jumlah sertifikat unik yang diakses oleh 1 ip dalam kurun waktu menit tertentu
+  async countUniqueCertificatesCheckedByIp(
+    ip: string,
+    minutes: number = 10,
+  ): Promise<number> {
+    const timeThreshold = new Date(
+      Date.now() - minutes * 60 * 1000,
+    ).toISOString();
+
+    // ambil log verifikasi yang berhasil menemukan sertifikat
+    const { data, error } = await supabase
+      .from("verification_logs")
+      .select("certificate_id")
+      .eq("ip_address", ip)
+      .not("certificate_id", "is", null)
+      .gte("created_at", timeThreshold);
+
+    if (error || !data) return 0;
+
+    // hitung jumlah id sertifikat unik
+    const uniqueCertIds = new Set(data.map((item) => item.certificate_id));
+    return uniqueCertIds.size;
+  }
 }

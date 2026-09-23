@@ -50,6 +50,21 @@ export class VerificationService {
     private readonly notificationService: NotificationService,
   ) {}
 
+  // helper internal untuk menjalankan monitor ancaman ip di background
+  private monitorIpActivity(ip?: string, wasFound?: boolean): void {
+    if (!ip) return;
+
+    // 1. periksa brute force acak (banyak percobaan gagal/berulang)
+    this.notificationService.checkAndNotifyRateLimitAbuse(ip).catch(() => {});
+
+    // 2. periksa scraping sertifikat berbeda jika dokumen valid ditemukan
+    if (wasFound) {
+      this.notificationService
+        .checkAndNotifyMultiRecipientScraping(ip)
+        .catch(() => {});
+    }
+  }
+
   async verifyByCertificateNumber(
     certificateNumber: string,
     meta: { ip?: string; userAgent?: string },
@@ -64,13 +79,7 @@ export class VerificationService {
         user_agent: meta.userAgent,
       });
 
-      // periksa potensi aktivitas brute force dari alamat ip
-      if (meta.ip) {
-        this.notificationService
-          .checkAndNotifyRateLimitAbuse(meta.ip)
-          .catch(() => {});
-      }
-
+      this.monitorIpActivity(meta.ip, false);
       return { status: "not_found" };
     }
 
@@ -85,7 +94,7 @@ export class VerificationService {
       user_agent: meta.userAgent,
     });
 
-    // picu notifikasi jika sertifikat yang diakses berstatus dicabut
+    // notifikasi jika dokumen yang dicabut mencoba diakses
     if (result === "revoked") {
       await this.notificationService.notifyRevokedAccess({
         certificateNumber: cert.certificate_number,
@@ -95,12 +104,7 @@ export class VerificationService {
       });
     }
 
-    // periksa potensi aktivitas brute force dari alamat ip
-    if (meta.ip) {
-      this.notificationService
-        .checkAndNotifyRateLimitAbuse(meta.ip)
-        .catch(() => {});
-    }
+    this.monitorIpActivity(meta.ip, true);
 
     return {
       status: result,
@@ -122,13 +126,7 @@ export class VerificationService {
         user_agent: meta.userAgent,
       });
 
-      // periksa potensi aktivitas brute force dari alamat ip
-      if (meta.ip) {
-        this.notificationService
-          .checkAndNotifyRateLimitAbuse(meta.ip)
-          .catch(() => {});
-      }
-
+      this.monitorIpActivity(meta.ip, false);
       return { status: "not_found" };
     }
 
@@ -143,7 +141,7 @@ export class VerificationService {
       user_agent: meta.userAgent,
     });
 
-    // picu notifikasi jika sertifikat yang diakses berstatus dicabut
+    // notifikasi jika dokumen yang dicabut mencoba diakses
     if (result === "revoked") {
       await this.notificationService.notifyRevokedAccess({
         certificateNumber: cert.certificate_number,
@@ -153,12 +151,7 @@ export class VerificationService {
       });
     }
 
-    // periksa potensi aktivitas brute force dari alamat ip
-    if (meta.ip) {
-      this.notificationService
-        .checkAndNotifyRateLimitAbuse(meta.ip)
-        .catch(() => {});
-    }
+    this.monitorIpActivity(meta.ip, true);
 
     return {
       status: result,
@@ -204,19 +197,14 @@ export class VerificationService {
               user_agent: meta.userAgent,
             });
 
-            // picu notifikasi peringatan pemalsuan dokumen karena nomor valid tetapi hash tidak cocok
+            // notifikasi pemalsuan dokumen (nomor cocok tetapi hash beda)
             await this.notificationService.notifyTamperedDocument({
               certificateNumber: certNumber,
               recipientName: foundByNumber.recipient_name,
               ip: meta.ip,
             });
 
-            // periksa potensi aktivitas brute force dari alamat ip
-            if (meta.ip) {
-              this.notificationService
-                .checkAndNotifyRateLimitAbuse(meta.ip)
-                .catch(() => {});
-            }
+            this.monitorIpActivity(meta.ip, true);
 
             return {
               status: "not_found",
@@ -235,13 +223,7 @@ export class VerificationService {
         user_agent: meta.userAgent,
       });
 
-      // periksa potensi aktivitas brute force dari alamat ip
-      if (meta.ip) {
-        this.notificationService
-          .checkAndNotifyRateLimitAbuse(meta.ip)
-          .catch(() => {});
-      }
-
+      this.monitorIpActivity(meta.ip, false);
       return { status: "not_found" };
     }
 
@@ -255,19 +237,14 @@ export class VerificationService {
         user_agent: meta.userAgent,
       });
 
-      // picu notifikasi peringatan pemalsuan dokumen jika perbandingan hash gagal
+      // notifikasi peringatan integritas hash gagal
       await this.notificationService.notifyTamperedDocument({
         certificateNumber: cert.certificate_number,
         recipientName: cert.recipient_name,
         ip: meta.ip,
       });
 
-      // periksa potensi aktivitas brute force dari alamat ip
-      if (meta.ip) {
-        this.notificationService
-          .checkAndNotifyRateLimitAbuse(meta.ip)
-          .catch(() => {});
-      }
+      this.monitorIpActivity(meta.ip, true);
 
       return {
         status: "not_found",
@@ -286,7 +263,7 @@ export class VerificationService {
       user_agent: meta.userAgent,
     });
 
-    // picu notifikasi jika sertifikat yang diakses berstatus dicabut
+    // notifikasi jika dokumen yang dicabut mencoba dicek
     if (result === "revoked") {
       await this.notificationService.notifyRevokedAccess({
         certificateNumber: cert.certificate_number,
@@ -296,12 +273,7 @@ export class VerificationService {
       });
     }
 
-    // periksa potensi aktivitas brute force dari alamat ip
-    if (meta.ip) {
-      this.notificationService
-        .checkAndNotifyRateLimitAbuse(meta.ip)
-        .catch(() => {});
-    }
+    this.monitorIpActivity(meta.ip, true);
 
     return {
       status: result,

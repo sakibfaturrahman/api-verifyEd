@@ -39,7 +39,7 @@ router.get("/:id/download", certificateController.download);
 router.post("/upload", upload.single("file"), certificateController.upload);
 router.post(
   "/upload/bulk",
-  upload.array("files", env.MAX_BULK_FILES),
+  upload.array("files", env.MAX_BULK_FILES ?? 100),
   certificateController.bulkUpload,
 );
 router.patch("/:id/revoke", certificateController.revoke);
