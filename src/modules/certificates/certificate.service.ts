@@ -4,6 +4,7 @@ import {
   CertificateWithEvent,
 } from "./certificate.repository";
 import { EventService } from "../events/event.service";
+import { NotificationService } from "../notifications/notification.service";
 import {
   RevokeCertificateDto,
   QrConfigDto,
@@ -55,6 +56,7 @@ export class CertificateService {
   constructor(
     private readonly certRepository: CertificateRepository,
     private readonly eventService: EventService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   // alur unggah dan generasi sertifikat tunggal
@@ -74,7 +76,7 @@ export class CertificateService {
       throw new AppError(validation.error!, 400, "INVALID_FILE");
     }
 
-    await this.eventService.assertEventOwnership(dto.event_id, userId);
+    const event = await this.eventService.assertEventOwnership(dto.event_id, userId);
 
     const certificateNumber = generateCertificateNumber();
     const qrToken = generateSecureToken(32);
@@ -139,11 +141,24 @@ export class CertificateService {
 
       const full = await this.certRepository.findById(certificate.id);
       return { certificate: full! };
-    } catch (err) {
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Gagal memproses berkas PDF";
       logger.error(
         { certificateId: certificate.id, err },
         "Certificate upload failed, cleaning up",
       );
+
+      // picu notifikasi kegagalan pemrosesan berkas stempel qr
+      this.notificationService
+        .notify({
+          title: "Kegagalan Pemrosesan Berkas",
+          message: `Gagal menyematkan stempel QR pada dokumen peserta ${dto.recipient_name}: ${errorMessage}`,
+          type: "tampered_document",
+          severity: "medium",
+          metadata: { eventId: dto.event_id, fileName: file.originalname, error: errorMessage },
+        })
+        .catch(() => {});
+
       await this.certRepository
         .deleteFile(env.SUPABASE_STORAGE_BUCKET_ORIGINAL, originalPath)
         .catch(() => {});
@@ -199,10 +214,24 @@ export class CertificateService {
       }
     }
 
+    const successfulCount = results.filter((r) => r.status === "success").length;
+    const failedCount = results.filter((r) => r.status === "failed").length;
+
+    // picu notifikasi jika penerbitan massal berjumlah banyak
+    if (successfulCount >= 10) {
+      this.notificationService
+        .notifyBulkIssuance({
+          eventTitle: `Event ID: ${eventId}`,
+          organizerName: `User ID: ${userId}`,
+          totalCount: successfulCount,
+        })
+        .catch(() => {});
+    }
+
     return {
       total: files.length,
-      successful: results.filter((r) => r.status === "success").length,
-      failed: results.filter((r) => r.status === "failed").length,
+      successful: successfulCount,
+      failed: failedCount,
       results,
     };
   }
@@ -390,7 +419,6 @@ export class CertificateService {
   ): Promise<void> {
     const cert = await this.getCertificateById(id, userId, isAdmin);
 
-    // bersihkan file fisik dari bucket original dan generated
     if (cert.original_file) {
       await this.certRepository
         .deleteFile(env.SUPABASE_STORAGE_BUCKET_ORIGINAL, cert.original_file)
@@ -407,7 +435,6 @@ export class CertificateService {
         });
     }
 
-    // hapus entitas dari database
     await this.certRepository.delete(id);
     logger.info({ certificateId: id, userId }, "certificate deleted successfully");
   }
@@ -430,9 +457,22 @@ export class CertificateService {
   async bulkRevoke(
     ids: string[],
     reason: string,
+    adminEmail = "Super Admin",
   ): Promise<{ revoked: number }> {
     const results = await this.certRepository.bulkRevoke(ids, reason);
     logger.info({ count: results.length, reason }, "Bulk revoke performed");
+
+    // picu notifikasi pencabutan massal jika ada dokumen yang dibatalkan
+    if (results.length > 0) {
+      this.notificationService
+        .notifyBulkRevoke({
+          totalRevoked: results.length,
+          reason,
+          adminOrUser: adminEmail,
+        })
+        .catch(() => {});
+    }
+
     return { revoked: results.length };
   }
-} 
+}

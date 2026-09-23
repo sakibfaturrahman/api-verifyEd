@@ -30,23 +30,30 @@ export interface CreateNotificationInput {
 }
 
 export class NotificationRepository {
-  // simpan notifikasi baru ke database
+  // simpan notifikasi baru ke supabase
   async createNotification(input: CreateNotificationInput): Promise<void> {
-    const { error } = await supabase.from("admin_notifications").insert({
-      title: input.title,
-      message: input.message,
-      type: input.type,
-      severity: input.severity,
-      metadata: input.metadata ?? {},
-    });
+    const { data, error } = await supabase
+      .from("admin_notifications")
+      .insert({
+        title: input.title,
+        message: input.message,
+        type: input.type,
+        severity: input.severity,
+        metadata: input.metadata ?? {},
+      })
+      .select();
 
     if (error) {
-      // catat log error tanpa menghentikan alur proses utama
+      // cetak ke terminal console agar langsung terlihat jika ada kesalahan skema atau env
+      console.error("supabase insert notification error:", error);
       logger.error({ error }, "failed to write admin notification");
+      throw error;
     }
+
+    console.log("notifikasi berhasil disimpan ke db:", data);
   }
 
-  // ambil daftar notifikasi dengan paginasi dan filter
+  // ambil daftar notifikasi admin
   async getNotifications(opts?: {
     page?: number;
     limit?: number;
@@ -77,7 +84,6 @@ export class NotificationRepository {
       throw error;
     }
 
-    // hitung total belum dibaca
     const { count: unreadCount } = await supabase
       .from("admin_notifications")
       .select("*", { count: "exact", head: true })
@@ -90,7 +96,7 @@ export class NotificationRepository {
     };
   }
 
-  // tandai satu notifikasi telah dibaca
+  // perbarui status baca satu notifikasi
   async markAsRead(id: string): Promise<void> {
     const { error } = await supabase
       .from("admin_notifications")
@@ -103,7 +109,7 @@ export class NotificationRepository {
     }
   }
 
-  // tandai semua notifikasi telah dibaca
+  // perbarui status baca seluruh notifikasi
   async markAllAsRead(): Promise<void> {
     const { error } = await supabase
       .from("admin_notifications")
@@ -116,7 +122,7 @@ export class NotificationRepository {
     }
   }
 
-  // periksa jumlah upaya verifikasi dari ip tertentu dalam kurun waktu menit
+  // hitung percobaan verifikasi dari ip dalam kurun menit tertentu
   async countRecentVerificationsByIp(
     ip: string,
     minutes: number = 5,

@@ -3,20 +3,16 @@ import multer from "multer";
 import { CertificateController } from "./certificate.controller";
 import { CertificateService } from "./certificate.service";
 import { CertificateRepository } from "./certificate.repository";
-import { authenticate } from "../../core/middleware/auth.middleware";
-import { authorize } from "../../core/middleware/role.middleware";
-import { env } from "../../config/env";
 import { eventService } from "../events/event.routes";
+import { notificationService } from "../notifications/notification.routes";
+import { authenticate } from "../../core/middleware/auth.middleware";
+import { env } from "../../config/env";
 
 const router = Router();
 
-// Multer configured for memory storage — no disk writes
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: {
-    fileSize: env.MAX_FILE_SIZE,
-    files: env.MAX_BULK_FILES,
-  },
+  limits: { fileSize: env.MAX_FILE_SIZE },
   fileFilter: (_req, file, cb) => {
     if (file.mimetype === "application/pdf") {
       cb(null, true);
@@ -27,32 +23,32 @@ const upload = multer({
 });
 
 export const certRepository = new CertificateRepository();
-export const certService = new CertificateService(certRepository, eventService);
-const certController = new CertificateController(certService);
+export const certService = new CertificateService(
+  certRepository,
+  eventService,
+  notificationService,
+);
+const certificateController = new CertificateController(certService);
 
-// All certificate routes require authentication
+// seluruh rute sertifikat di bawah ini membutuhkan autentikasi
 router.use(authenticate);
-router.use(authorize("admin", "user"));
 
-// Important: specific routes before parameterized routes
-router.post("/qr-config", certController.saveQrConfig);
-router.post("/upload", upload.single("file"), certController.upload);
+router.get("/", certificateController.list);
+router.get("/:id", certificateController.getById);
+router.get("/:id/download", certificateController.download);
+router.post("/upload", upload.single("file"), certificateController.upload);
 router.post(
   "/upload/bulk",
   upload.array("files", env.MAX_BULK_FILES),
-  certController.bulkUpload,
+  certificateController.bulkUpload,
 );
-
-router.delete("/:id", certController.delete);
-
-router.get("/", certController.list);
-router.get("/:id", certController.getById);
-router.get("/:id/download", certController.download);
-router.patch("/:id/revoke", certController.revoke);
+router.patch("/:id/revoke", certificateController.revoke);
 router.post(
   "/:id/regenerate",
   upload.single("file"),
-  certController.regenerate,
+  certificateController.regenerate,
 );
+router.post("/qr-config", certificateController.saveQrConfig);
+router.delete("/:id", certificateController.delete);
 
 export default router;

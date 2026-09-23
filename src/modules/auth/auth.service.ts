@@ -1,5 +1,6 @@
 import { AuthRepository, ProfileRow } from "./auth.repository";
 import { RegisterDto, LoginDto, RefreshDto } from "./auth.validation";
+import { NotificationService } from "../notifications/notification.service";
 import { ConflictError } from "../../core/errors/ConflictError";
 import { UnauthorizedError } from "../../core/errors/UnauthorizedError";
 import { AppError } from "../../core/errors/AppError";
@@ -17,7 +18,10 @@ export interface AuthResponse {
 }
 
 export class AuthService {
-  constructor(private readonly authRepository: AuthRepository) {}
+  constructor(
+    private readonly authRepository: AuthRepository,
+    private readonly notificationService: NotificationService,
+  ) {}
 
   async register(dto: RegisterDto): Promise<{ message: string }> {
     const exists = await this.authRepository.emailExists(dto.email);
@@ -34,11 +38,24 @@ export class AuthService {
         address: dto.address,
         description: dto.description,
       });
+
+      // gunakan await agar promise selesai sebelum response http dikirim
+      try {
+        await this.notificationService.notifyNewRegistration({
+          name: dto.name,
+          email: dto.email,
+        });
+      } catch (notifErr) {
+        logger.warn(
+          { notifErr, email: dto.email },
+          "failed to create admin notification on register",
+        );
+      }
+
       logger.info({ email: dto.email }, "New user registered");
 
       return { message: "Registration successful. You can now log in." };
     } catch (err: unknown) {
-      // error handler tetap sama
       throw err;
     }
   }
@@ -59,7 +76,6 @@ export class AuthService {
       throw err;
     }
 
-    // Fetch profile to check status and return role
     const profile = await this.authRepository.findProfileById(
       await this.getUserIdFromToken(session.accessToken),
     );
@@ -102,10 +118,6 @@ export class AuthService {
     return profile;
   }
 
-  /**
-   * Extracts the user ID from an access token without re-validating it.
-   * Used only after successful signIn where we know the token is valid.
-   */
   private async getUserIdFromToken(accessToken: string): Promise<string> {
     const { supabaseAnon } = await import("../../config/supabase");
     const { data } = await supabaseAnon.auth.getUser(accessToken);
