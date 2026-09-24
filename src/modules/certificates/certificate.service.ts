@@ -139,25 +139,42 @@ export class CertificateService {
         "Certificate uploaded and generated",
       );
 
+      // notifikasi ke pengguna bahwa sertifikat berhasil diterbitkan
+      try {
+        await this.notificationService.notifyUserCertificateIssued(userId, {
+          certificateNumber,
+          recipientName: dto.recipient_name,
+          eventName: event.name,
+        });
+      } catch (notifErr) {
+        logger.warn(
+          { notifErr, certificateNumber },
+          "failed to send user certificate issued notification",
+        );
+      }
+
       const full = await this.certRepository.findById(certificate.id);
       return { certificate: full! };
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : "Gagal memproses berkas PDF";
+      const errorMessage =
+        err instanceof Error ? err.message : "Gagal memproses berkas PDF";
       logger.error(
         { certificateId: certificate.id, err },
         "Certificate upload failed, cleaning up",
       );
 
-      // picu notifikasi kegagalan pemrosesan berkas stempel qr
-      this.notificationService
-        .notify({
-          title: "Kegagalan Pemrosesan Berkas",
-          message: `Gagal menyematkan stempel QR pada dokumen peserta ${dto.recipient_name}: ${errorMessage}`,
-          type: "tampered_document",
-          severity: "medium",
-          metadata: { eventId: dto.event_id, fileName: file.originalname, error: errorMessage },
-        })
-        .catch(() => {});
+      // notifikasi ke pengguna jika terjadi kegagalan pemrosesan pdf
+      try {
+        await this.notificationService.notifyUserProcessingFailed(userId, {
+          fileName: file.originalname,
+          error: errorMessage,
+        });
+      } catch (notifErr) {
+        logger.warn(
+          { notifErr, fileName: file.originalname },
+          "failed to send user processing failed notification",
+        );
+      }
 
       await this.certRepository
         .deleteFile(env.SUPABASE_STORAGE_BUCKET_ORIGINAL, originalPath)
@@ -172,14 +189,16 @@ export class CertificateService {
     }
   }
 
-  // alur unggah sertifikat massal
+  // alur unggah sertifikat massal dengan dukungan kustom koordinat posisi QR
   async bulkUploadCertificates(
     userId: string,
     eventId: string,
     recipientNames: string[],
     files: Express.Multer.File[],
     verifyBaseUrl: string,
+    qrConfig?: QrConfig,
   ): Promise<BulkUploadResult> {
+    const event = await this.eventService.assertEventOwnership(eventId, userId);
     const results: BulkUploadFileResult[] = [];
 
     for (let i = 0; i < files.length; i++) {
@@ -193,7 +212,7 @@ export class CertificateService {
           {
             event_id: eventId,
             recipient_name: recipientName,
-            qr_config: undefined,
+            qr_config: qrConfig,
           },
           file,
           verifyBaseUrl,
@@ -217,15 +236,34 @@ export class CertificateService {
     const successfulCount = results.filter((r) => r.status === "success").length;
     const failedCount = results.filter((r) => r.status === "failed").length;
 
-    // picu notifikasi jika penerbitan massal berjumlah banyak
+    // notifikasi ringkasan unggah massal ke pengguna
+    try {
+      await this.notificationService.notifyUserBulkUploadCompleted(userId, {
+        eventName: event.name,
+        successful: successfulCount,
+        failed: failedCount,
+      });
+    } catch (notifErr) {
+      logger.warn(
+        { notifErr, eventId },
+        "failed to send user bulk upload notification",
+      );
+    }
+
+    // notifikasi ke admin jika jumlah penerbitan massal berskala besar
     if (successfulCount >= 10) {
-      this.notificationService
-        .notifyBulkIssuance({
-          eventTitle: `Event ID: ${eventId}`,
-          organizerName: `User ID: ${userId}`,
+      try {
+        await this.notificationService.notifyBulkIssuance({
+          eventTitle: event.name,
+          organizerName: event.organizer || `User ID: ${userId}`,
           totalCount: successfulCount,
-        })
-        .catch(() => {});
+        });
+      } catch (notifErr) {
+        logger.warn(
+          { notifErr, eventId },
+          "failed to send admin bulk issuance notification",
+        );
+      }
     }
 
     return {
@@ -312,8 +350,27 @@ export class CertificateService {
       );
     }
 
+    const revokedCert = await this.certRepository.revoke(id, dto.reason);
     logger.info({ certificateId: id, userId }, "Certificate revoked");
-    return this.certRepository.revoke(id, dto.reason);
+
+    // notifikasi ke pemilik sertifikat bahwa sertifikat telah dicabut
+    try {
+      await this.notificationService.notifyUserCertificateRevoked(
+        cert.events.user_id,
+        {
+          certificateNumber: cert.certificate_number,
+          recipientName: cert.recipient_name,
+          reason: dto.reason,
+        },
+      );
+    } catch (notifErr) {
+      logger.warn(
+        { notifErr, certificateId: id },
+        "failed to send user certificate revoked notification",
+      );
+    }
+
+    return revokedCert;
   }
 
   // buat ulang berkas sertifikat dengan berkas pdf baru
@@ -423,7 +480,10 @@ export class CertificateService {
       await this.certRepository
         .deleteFile(env.SUPABASE_STORAGE_BUCKET_ORIGINAL, cert.original_file)
         .catch((err) => {
-          logger.warn({ err, file: cert.original_file }, "failed to remove original storage file");
+          logger.warn(
+            { err, file: cert.original_file },
+            "failed to remove original storage file",
+          );
         });
     }
 
@@ -431,7 +491,10 @@ export class CertificateService {
       await this.certRepository
         .deleteFile(env.SUPABASE_STORAGE_BUCKET_GENERATED, cert.generated_file)
         .catch((err) => {
-          logger.warn({ err, file: cert.generated_file }, "failed to remove generated storage file");
+          logger.warn(
+            { err, file: cert.generated_file },
+            "failed to remove generated storage file",
+          );
         });
     }
 
@@ -462,15 +525,20 @@ export class CertificateService {
     const results = await this.certRepository.bulkRevoke(ids, reason);
     logger.info({ count: results.length, reason }, "Bulk revoke performed");
 
-    // picu notifikasi pencabutan massal jika ada dokumen yang dibatalkan
+    // notifikasi pencabutan massal ke panel admin
     if (results.length > 0) {
-      this.notificationService
-        .notifyBulkRevoke({
+      try {
+        await this.notificationService.notifyBulkRevoke({
           totalRevoked: results.length,
           reason,
           adminOrUser: adminEmail,
-        })
-        .catch(() => {});
+        });
+      } catch (notifErr) {
+        logger.warn(
+          { notifErr },
+          "failed to send admin bulk revoke notification",
+        );
+      }
     }
 
     return { revoked: results.length };
