@@ -11,7 +11,7 @@
   ],
   "headers": [
     {
-      "source": "/(.*)",
+      "source": "/api/(.*)",
       "headers": [
         { "key": "Access-Control-Allow-Credentials", "value": "true" },
         {
@@ -29,10 +29,10 @@
       ]
     }
   ],
-  "routes": [
+  "rewrites": [
     {
-      "src": "/(.*)",
-      "dest": "src/app.ts"
+      "source": "/(.*)",
+      "destination": "/src/app.ts"
     }
   ]
 }

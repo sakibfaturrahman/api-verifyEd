@@ -18,7 +18,84 @@ const app = express();
 
 const SWAGGER_CDN = "https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.11.0";
 
-// Keamanan Header HTTP
+// ── 1. Penanganan CORS & Preflight OPTIONS (Wajib di urutan pertama) ──────────
+const configuredOrigins = (env.CORS_ORIGIN || "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+const defaultAllowedOrigins = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3001",
+];
+
+const allAllowedOrigins = [
+  ...new Set([...configuredOrigins, ...defaultAllowedOrigins]),
+];
+
+// Helper validasi origin
+function isOriginAllowed(origin?: string): boolean {
+  if (!origin) return true; // Server-to-server, Postman, curl
+  if (allAllowedOrigins.includes(origin)) return true;
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+  if (origin.endsWith(".vercel.app")) return true;
+  return false;
+}
+
+// Interceptor manual: Pastikan header CORS selalu terpasang untuk origin yang valid
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const origin = req.headers.origin;
+
+  if (isOriginAllowed(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin || "*");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+    );
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Requested-With, Accept, Origin, X-CSRF-Token",
+    );
+  }
+
+  // Jika preflight request, segera akhiri dengan status 204 No Content
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+
+  next();
+});
+
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    if (isOriginAllowed(origin)) {
+      callback(null, true);
+    } else {
+      logger.warn({ origin, allAllowedOrigins }, "CORS blocked origin");
+      callback(null, false); // Jangan lempar new Error() agar tidak menjadi 500 crash
+    }
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+    "Accept",
+    "Origin",
+    "X-CSRF-Token",
+  ],
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
+
+// ── 2. Security Headers (Helmet) ─────────────────────────────────────────────
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -37,63 +114,11 @@ app.use(
   }),
 );
 
-// ── Penanganan CORS ────────────────────────────────────────────────────────
-const configuredOrigins = (env.CORS_ORIGIN || "")
-  .split(",")
-  .map((o) => o.trim())
-  .filter(Boolean);
-
-const defaultAllowedOrigins = [
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-  "http://localhost:3001",
-];
-
-const allAllowedOrigins = [
-  ...new Set([...configuredOrigins, ...defaultAllowedOrigins]),
-];
-
-const corsOptions: cors.CorsOptions = {
-  origin: (origin, callback) => {
-    // Izinkan request tanpa origin (seperti curl, mobile app, postman)
-    if (!origin) {
-      return callback(null, true);
-    }
-
-    // Izinkan jika ada di list atau merupakan origin localhost/vercel preview
-    const isAllowed =
-      allAllowedOrigins.includes(origin) ||
-      /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
-      origin.endsWith(".vercel.app");
-
-    if (isAllowed) {
-      callback(null, true);
-    } else {
-      logger.warn({ origin, allAllowedOrigins }, "CORS blocked origin");
-      callback(new Error(`Origin ${origin} not allowed by CORS`));
-    }
-  },
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: [
-    "Content-Type",
-    "Authorization",
-    "X-Requested-With",
-    "Accept",
-    "Origin",
-  ],
-  optionsSuccessStatus: 204,
-};
-
-// Gunakan satu middleware cors terpadu (otomatis menangani preflight OPTIONS)
-app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
-
-// Parsing payload body
+// ── 3. Parsing Payload Body ──────────────────────────────────────────────────
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// Logging
+// ── 4. Logging ───────────────────────────────────────────────────────────────
 app.use(
   pinoHttp({
     logger,
@@ -106,13 +131,13 @@ app.use(
   }),
 );
 
-// Pembatasan laju akses (lewati method OPTIONS agar preflight tidak pernah terblokir)
+// ── 5. Rate Limiting ─────────────────────────────────────────────────────────
 app.use("/api", (req: Request, res: Response, next: NextFunction) => {
   if (req.method === "OPTIONS") return next();
   return apiRateLimit(req, res, next);
 });
 
-// Health checks
+// ── 6. Health Checks ─────────────────────────────────────────────────────────
 app.get("/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
@@ -134,7 +159,7 @@ app.get("/health/database", async (_req: Request, res: Response) => {
   });
 });
 
-// Swagger docs
+// ── 7. Swagger Documentation ─────────────────────────────────────────────────
 app.use(
   "/api/docs",
   swaggerUi.serveFiles(swaggerSpec, {
@@ -164,10 +189,10 @@ app.get("/api/docs.json", (_req: Request, res: Response) => {
   res.send(swaggerSpec);
 });
 
-// Routes
+// ── 8. Routes ────────────────────────────────────────────────────────────────
 app.use("/api/v1", apiRouter);
 
-// 404 handler
+// ── 9. Not Found & Error Handlers ────────────────────────────────────────────
 app.use((_req: Request, res: Response) => {
   res.status(404).json({
     success: false,
@@ -176,7 +201,6 @@ app.use((_req: Request, res: Response) => {
   });
 });
 
-// Error handling middleware
 app.use(
   errorMiddleware as (
     err: Error,
