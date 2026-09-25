@@ -344,6 +344,7 @@ export class CertificateService {
   }
 
   // Unduh sertifikat via signed URL
+  // dapatkan signed url berkas pdf untuk diunduh
   async downloadCertificate(
     id: string,
     userId: string,
@@ -360,15 +361,35 @@ export class CertificateService {
       );
     }
 
+    // Gunakan bucket terkonfigurasi atau fallback ke 'certificates'
     const bucket = cert.generated_file
-      ? this.bucketGenerated
-      : this.bucketOriginal;
+      ? env.SUPABASE_STORAGE_BUCKET_GENERATED || "certificates"
+      : env.SUPABASE_STORAGE_BUCKET_ORIGINAL || "certificates";
 
-    return this.certRepository.getSignedUrl(
-      filePath,
-      bucket,
-      env.SIGNED_URL_EXPIRY || 3600,
+    const cleanRecipient = (cert.recipient_name || "Penerima").replace(
+      /[\\/:*?"<>|]/g,
+      "_",
     );
+    const downloadFileName = `Sertifikat - ${cleanRecipient} - ${cert.certificate_number}.pdf`;
+
+    // Supabase Storage SDK createSignedUrl mendukung opsi download: 'nama-file.pdf'
+    const { supabase } = await import("../../config/supabase");
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .createSignedUrl(filePath, env.SIGNED_URL_EXPIRY || 3600, {
+        download: downloadFileName, // Ini akan memaksa Content-Disposition dengan nama penerima
+      });
+
+    if (error || !data?.signedUrl) {
+      // Fallback jika createSignedUrl gagal via SDK kustom
+      return this.certRepository.getSignedUrl(
+        filePath,
+        bucket,
+        env.SIGNED_URL_EXPIRY || 3600,
+      );
+    }
+
+    return data.signedUrl;
   }
 
   // Pencabutan status sertifikat
