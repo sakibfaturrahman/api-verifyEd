@@ -5,12 +5,11 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import swaggerUi from "swagger-ui-express";
 
-import { env, isDev } from "./config/env";
+import { env } from "./config/env";
 import { swaggerSpec } from "./config/swagger";
 import { apiRateLimit } from "./core/middleware/rateLimit.middleware";
 import { errorMiddleware } from "./core/middleware/error.middleware";
 import apiRouter from "./routes/index";
-
 import { logger } from "./core/utils/logger";
 
 export { logger };
@@ -19,9 +18,10 @@ const app = express();
 
 const SWAGGER_CDN = "https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.11.0";
 
-// keamanan header http
+// Keamanan Header HTTP
 app.use(
   helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
@@ -37,63 +37,63 @@ app.use(
   }),
 );
 
-// daftar domain yang diizinkan mengakses api
+// ── Penanganan CORS ────────────────────────────────────────────────────────
 const configuredOrigins = (env.CORS_ORIGIN || "")
   .split(",")
   .map((o) => o.trim())
   .filter(Boolean);
 
-const allowedOrigins = [
-  ...configuredOrigins,
+const defaultAllowedOrigins = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
+  "http://localhost:3001",
 ];
 
-// penanganan manual cors dan preflight options sebelum middleware lain
-app.use((req: Request, res: Response, next: NextFunction) => {
-  const origin = req.headers.origin;
-
-  if (origin && (allowedOrigins.includes(origin) || isDev)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-    res.setHeader(
-      "Access-Control-Allow-Methods",
-      "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-    );
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Requested-With, Accept",
-    );
-  }
-
-  // tanggapi langsung permintaan preflight tanpa meneruskannya ke rute lain
-  if (req.method === "OPTIONS") {
-    res.sendStatus(204);
-    return;
-  }
-
-  next();
-});
+const allAllowedOrigins = [
+  ...new Set([...configuredOrigins, ...defaultAllowedOrigins]),
+];
 
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin) || isDev) {
+    // Izinkan request tanpa origin (seperti curl, mobile app, postman)
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    // Izinkan jika ada di list atau merupakan origin localhost/vercel preview
+    const isAllowed =
+      allAllowedOrigins.includes(origin) ||
+      /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
+      origin.endsWith(".vercel.app");
+
+    if (isAllowed) {
       callback(null, true);
     } else {
-      logger.warn({ origin, allowedOrigins }, "cors blocked origin");
-      callback(null, false);
+      logger.warn({ origin, allAllowedOrigins }, "CORS blocked origin");
+      callback(new Error(`Origin ${origin} not allowed by CORS`));
     }
   },
   credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+    "Accept",
+    "Origin",
+  ],
+  optionsSuccessStatus: 204,
 };
 
+// Gunakan satu middleware cors terpadu (otomatis menangani preflight OPTIONS)
 app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
-// parsing payload body
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true, limit: "1mb" }));
+// Parsing payload body
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// pencatatan log request http
+// Logging
 app.use(
   pinoHttp({
     logger,
@@ -106,10 +106,13 @@ app.use(
   }),
 );
 
-// pembatasan laju akses global
-app.use("/api", apiRateLimit);
+// Pembatasan laju akses (lewati method OPTIONS agar preflight tidak pernah terblokir)
+app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+  if (req.method === "OPTIONS") return next();
+  return apiRateLimit(req, res, next);
+});
 
-// pemeriksaan kesehatan server
+// Health checks
 app.get("/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
@@ -131,7 +134,7 @@ app.get("/health/database", async (_req: Request, res: Response) => {
   });
 });
 
-// dokumentasi swagger ui via cdn
+// Swagger docs
 app.use(
   "/api/docs",
   swaggerUi.serveFiles(swaggerSpec, {
@@ -161,10 +164,10 @@ app.get("/api/docs.json", (_req: Request, res: Response) => {
   res.send(swaggerSpec);
 });
 
-// rute utama api v1
+// Routes
 app.use("/api/v1", apiRouter);
 
-// penanganan rute tidak ditemukan
+// 404 handler
 app.use((_req: Request, res: Response) => {
   res.status(404).json({
     success: false,
@@ -173,7 +176,7 @@ app.use((_req: Request, res: Response) => {
   });
 });
 
-// penanganan error terpusat
+// Error handling middleware
 app.use(
   errorMiddleware as (
     err: Error,
