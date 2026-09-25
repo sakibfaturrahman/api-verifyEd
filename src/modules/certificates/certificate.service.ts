@@ -351,7 +351,10 @@ export class CertificateService {
   ): Promise<string> {
     const cert = await this.getCertificateById(id, userId, isAdmin);
 
-    let rawPath = cert.generated_file || cert.original_file;
+    // Prioritaskan file hasil generate (yang sudah ada QR code), jika tidak ada gunakan original
+    const isGenerated = Boolean(cert.generated_file);
+    const rawPath = cert.generated_file || cert.original_file;
+
     if (!rawPath) {
       throw new AppError(
         "Berkas PDF untuk sertifikat ini tidak ditemukan di database.",
@@ -360,58 +363,51 @@ export class CertificateService {
       );
     }
 
-    // Bersihkan prefix jika path tersimpan dengan awalan nama bucket
+    // Tentukan bucket persis sesuai yang ada di Supabase
+    const bucket = isGenerated
+      ? (process.env.SUPABASE_STORAGE_BUCKET_GENERATED || "certificates-generated")
+      : (process.env.SUPABASE_STORAGE_BUCKET_ORIGINAL || "certificates-original");
+
+    // Bersihkan prefix nama bucket jika tersimpan di database
     let cleanPath = rawPath.trim();
-    if (cleanPath.startsWith("certificates/")) {
+    if (cleanPath.startsWith(`${bucket}/`)) {
+      cleanPath = cleanPath.slice(bucket.length + 1);
+    } else if (cleanPath.startsWith("certificates-generated/")) {
+      cleanPath = cleanPath.replace(/^certificates-generated\//, "");
+    } else if (cleanPath.startsWith("certificates-original/")) {
+      cleanPath = cleanPath.replace(/^certificates-original\//, "");
+    } else if (cleanPath.startsWith("certificates/")) {
       cleanPath = cleanPath.replace(/^certificates\//, "");
     }
+
     if (cleanPath.startsWith("/")) {
       cleanPath = cleanPath.substring(1);
     }
 
-    const bucket = "certificates"; // Gunakan default bucket utama
+    const cleanRecipient = (cert.recipient_name || "Peserta")
+      .replace(/[\\/:*?"<>|]/g, "_")
+      .trim();
+    const downloadFileName = `Sertifikat - ${cleanRecipient} - ${cert.certificate_number}.pdf`;
 
-    try {
-      // Gunakan supabase client dengan service role jika ada agar kebal dari batasan RLS
-      const { supabase } = await import("../../config/supabase");
+    const { supabase } = await import("../../config/supabase");
 
-      const cleanRecipient = (cert.recipient_name || "Peserta")
-        .replace(/[\\/:*?"<>|]/g, "_")
-        .trim();
-      const downloadFileName = `Sertifikat - ${cleanRecipient} - ${cert.certificate_number}.pdf`;
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .createSignedUrl(cleanPath, 3600, {
+        download: downloadFileName,
+      });
 
-      const { data, error } = await supabase.storage
+    if (error || !data?.signedUrl) {
+      // Fallback ke Public URL jika getSignedUrl gagal
+      const { data: pubData } = supabase.storage
         .from(bucket)
-        .createSignedUrl(cleanPath, 3600, {
-          download: downloadFileName,
-        });
+        .getPublicUrl(cleanPath);
 
-      if (error || !data?.signedUrl) {
-        logger.warn(
-          { error, cleanPath },
-          "createSignedUrl gagal, mencoba fallback publicUrl",
-        );
-        // Fallback ke Public URL jika bucket diset sebagai public
-        const { data: pubData } = supabase.storage
-          .from(bucket)
-          .getPublicUrl(cleanPath);
-
-        if (pubData?.publicUrl) return pubData.publicUrl;
-        throw error || new Error("Gagal membuat tautan unduhan berkas");
-      }
-
-      return data.signedUrl;
-    } catch (err: unknown) {
-      logger.error(
-        { err, certId: id, path: cleanPath },
-        "Download certificate failed",
-      );
-      throw new AppError(
-        "Gagal mempersiapkan berkas unduhan dari storage server.",
-        500,
-        "STORAGE_DOWNLOAD_ERROR",
-      );
+      if (pubData?.publicUrl) return pubData.publicUrl;
+      throw error || new Error(`Gagal membuat link unduhan dari bucket ${bucket}`);
     }
+
+    return data.signedUrl;
   }
 
   // Pencabutan status sertifikat
