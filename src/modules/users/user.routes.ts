@@ -1,23 +1,18 @@
-import { Router } from 'express';
-import { UserController } from './user.controller';
-import { UserService } from './user.service';
-import { UserRepository } from './user.repository';
-import { validate } from '../../core/middleware/validation.middleware';
-import { authenticate } from '../../core/middleware/auth.middleware';
-import { updateProfileSchema, changePasswordSchema } from './user.validation';
+import { Router } from "express";
+import { UserController } from "./user.controller";
+import { UserService } from "./user.service";
+import { UserRepository } from "./user.repository";
+import { authenticate } from "../../core/middleware/auth.middleware";
 
 const router = Router();
-
 const userRepository = new UserRepository();
-const userService = new UserService(userRepository);
+export const userService = new UserService(userRepository);
 const userController = new UserController(userService);
 
-// All profile routes require authentication
-router.use(authenticate);
+// Dukung baik /profile maupun /users/profile, serta method PUT dan PATCH
+router.get("/profile", authenticate, userController.getProfile);
+router.put("/profile", authenticate, userController.updateProfile);
+router.patch("/profile", authenticate, userController.updateProfile);
+router.post("/profile/change-password", authenticate, userController.changePassword);
 
-router.get('/', userController.getProfile);
-router.put('/', validate('body', updateProfileSchema), userController.updateProfile);
-router.post('/change-password', validate('body', changePasswordSchema), userController.changePassword);
-
-export { userRepository, userService };
 export default router;

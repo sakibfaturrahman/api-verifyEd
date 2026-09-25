@@ -343,8 +343,7 @@ export class CertificateService {
     return cert;
   }
 
-  // Unduh sertifikat via signed URL
-  // dapatkan signed url berkas pdf untuk diunduh
+  // dapatkan signed url berkas pdf untuk diunduh secara aman
   async downloadCertificate(
     id: string,
     userId: string,
@@ -352,44 +351,67 @@ export class CertificateService {
   ): Promise<string> {
     const cert = await this.getCertificateById(id, userId, isAdmin);
 
-    const filePath = cert.generated_file ?? cert.original_file;
-    if (!filePath) {
+    let rawPath = cert.generated_file || cert.original_file;
+    if (!rawPath) {
       throw new AppError(
-        "No file available for this certificate",
+        "Berkas PDF untuk sertifikat ini tidak ditemukan di database.",
         404,
         "FILE_NOT_FOUND",
       );
     }
 
-    // Gunakan bucket terkonfigurasi atau fallback ke 'certificates'
-    const bucket = cert.generated_file
-      ? env.SUPABASE_STORAGE_BUCKET_GENERATED || "certificates"
-      : env.SUPABASE_STORAGE_BUCKET_ORIGINAL || "certificates";
-
-    const cleanRecipient = (cert.recipient_name || "Penerima").replace(
-      /[\\/:*?"<>|]/g,
-      "_",
-    );
-    const downloadFileName = `Sertifikat - ${cleanRecipient} - ${cert.certificate_number}.pdf`;
-
-    // Supabase Storage SDK createSignedUrl mendukung opsi download: 'nama-file.pdf'
-    const { supabase } = await import("../../config/supabase");
-    const { data, error } = await supabase.storage
-      .from(bucket)
-      .createSignedUrl(filePath, env.SIGNED_URL_EXPIRY || 3600, {
-        download: downloadFileName, // Ini akan memaksa Content-Disposition dengan nama penerima
-      });
-
-    if (error || !data?.signedUrl) {
-      // Fallback jika createSignedUrl gagal via SDK kustom
-      return this.certRepository.getSignedUrl(
-        filePath,
-        bucket,
-        env.SIGNED_URL_EXPIRY || 3600,
-      );
+    // Bersihkan prefix jika path tersimpan dengan awalan nama bucket
+    let cleanPath = rawPath.trim();
+    if (cleanPath.startsWith("certificates/")) {
+      cleanPath = cleanPath.replace(/^certificates\//, "");
+    }
+    if (cleanPath.startsWith("/")) {
+      cleanPath = cleanPath.substring(1);
     }
 
-    return data.signedUrl;
+    const bucket = "certificates"; // Gunakan default bucket utama
+
+    try {
+      // Gunakan supabase client dengan service role jika ada agar kebal dari batasan RLS
+      const { supabase } = await import("../../config/supabase");
+
+      const cleanRecipient = (cert.recipient_name || "Peserta")
+        .replace(/[\\/:*?"<>|]/g, "_")
+        .trim();
+      const downloadFileName = `Sertifikat - ${cleanRecipient} - ${cert.certificate_number}.pdf`;
+
+      const { data, error } = await supabase.storage
+        .from(bucket)
+        .createSignedUrl(cleanPath, 3600, {
+          download: downloadFileName,
+        });
+
+      if (error || !data?.signedUrl) {
+        logger.warn(
+          { error, cleanPath },
+          "createSignedUrl gagal, mencoba fallback publicUrl",
+        );
+        // Fallback ke Public URL jika bucket diset sebagai public
+        const { data: pubData } = supabase.storage
+          .from(bucket)
+          .getPublicUrl(cleanPath);
+
+        if (pubData?.publicUrl) return pubData.publicUrl;
+        throw error || new Error("Gagal membuat tautan unduhan berkas");
+      }
+
+      return data.signedUrl;
+    } catch (err: unknown) {
+      logger.error(
+        { err, certId: id, path: cleanPath },
+        "Download certificate failed",
+      );
+      throw new AppError(
+        "Gagal mempersiapkan berkas unduhan dari storage server.",
+        500,
+        "STORAGE_DOWNLOAD_ERROR",
+      );
+    }
   }
 
   // Pencabutan status sertifikat
