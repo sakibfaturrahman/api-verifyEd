@@ -130,8 +130,6 @@ export class DashboardRepository {
     revokedCertificates: number;
     totalVerifications: number;
   }> {
-    // 1. Ambil data total profil non-admin (mitra/organisasi)
-    // Gunakan .neq('role', 'admin') agar mencakup 'user', 'organizer', atau role mitra lainnya
     const [
       usersResult,
       activeUsersResult,
@@ -141,6 +139,7 @@ export class DashboardRepository {
       revokedCertsResult,
       verificationsResult,
     ] = await Promise.all([
+      // Mengambil mitra/organisasi (semua akun selain admin)
       supabase
         .from("profiles")
         .select("id", { count: "exact" })
@@ -154,10 +153,7 @@ export class DashboardRepository {
         .eq("status", "active")
         .limit(1),
 
-      supabase
-        .from("events")
-        .select("id", { count: "exact" })
-        .limit(1),
+      supabase.from("events").select("id", { count: "exact" }).limit(1),
 
       supabase
         .from("certificates")
@@ -182,19 +178,17 @@ export class DashboardRepository {
         .limit(1),
     ]);
 
-    // Fallback: Jika profil non-admin ternyata kosong (misal role di db 'ADMIN' huruf besar),
-    // ambil total semua profile dikurangi 1 (admin)
     let totalUsersCount = usersResult.count ?? 0;
     let activeUsersCount = activeUsersResult.count ?? 0;
 
+    // Fallback: Jika tidak ditemukan role non-admin, hitung seluruh row profiles
     if (totalUsersCount === 0) {
-      const { count: allProfilesCount } = await supabase
+      const { count: allProfiles } = await supabase
         .from("profiles")
         .select("id", { count: "exact" })
         .limit(1);
 
-      // Jika ada profil terdaftar, anggap setidaknya 1 adalah akun user jika total > 1
-      totalUsersCount = Math.max((allProfilesCount ?? 0) - 1, 0);
+      totalUsersCount = Math.max((allProfiles ?? 0) - 1, 0);
       activeUsersCount = totalUsersCount;
     }
 

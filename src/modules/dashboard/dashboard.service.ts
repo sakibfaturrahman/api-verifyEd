@@ -1,179 +1,43 @@
-import { supabase } from "../../config/supabase";
+import { DashboardRepository } from "./dashboard.repository";
+import { VerificationRepository } from "../verification/verification.repository";
 
-export class DashboardRepository {
-  /**
-   * Mengambil data statistik untuk user / organisasi tertentu.
-   */
-  async getUserStats(userId: string): Promise<{
-    totalEvents: number;
-    totalCertificates: number;
-    activeCertificates: number;
-    revokedCertificates: number;
-    totalVerifications: number;
-  }> {
-    // Hitung total acara milik user
-    const { count: totalEvents } = await supabase
-      .from("events")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", userId);
-
-    // Ambil daftar event_id milik user
-    const { data: userEvents } = await supabase
-      .from("events")
-      .select("id")
-      .eq("user_id", userId);
-
-    const eventIds = (userEvents ?? []).map((e: { id: string }) => e.id);
-
-    let totalCertificates = 0;
-    let activeCertificates = 0;
-    let revokedCertificates = 0;
-    let totalVerifications = 0;
-    let certIds: string[] = [];
-
-    if (eventIds.length > 0) {
-      const [{ count: total }, { count: active }, { count: revoked }] =
-        await Promise.all([
-          supabase
-            .from("certificates")
-            .select("id", { count: "exact", head: true })
-            .in("event_id", eventIds),
-          supabase
-            .from("certificates")
-            .select("id", { count: "exact", head: true })
-            .in("event_id", eventIds)
-            .eq("status", "active"),
-          supabase
-            .from("certificates")
-            .select("id", { count: "exact", head: true })
-            .in("event_id", eventIds)
-            .eq("status", "revoked"),
-        ]);
-
-      totalCertificates = total ?? 0;
-      activeCertificates = active ?? 0;
-      revokedCertificates = revoked ?? 0;
-
-      // Ambil daftar id sertifikat untuk menghitung total verifikasi
-      const { data: certs } = await supabase
-        .from("certificates")
-        .select("id")
-        .in("event_id", eventIds);
-
-      certIds = (certs ?? []).map((c: { id: string }) => c.id);
-    }
-
-    if (certIds.length > 0) {
-      const { count: verifications } = await supabase
-        .from("verification_logs")
-        .select("id", { count: "exact", head: true })
-        .in("certificate_id", certIds);
-
-      totalVerifications = verifications ?? 0;
-    }
-
-    return {
-      totalEvents: totalEvents ?? 0,
-      totalCertificates,
-      activeCertificates,
-      revokedCertificates,
-      totalVerifications,
-    };
-  }
+export class DashboardService {
+  constructor(
+    private readonly dashboardRepository: DashboardRepository,
+    private readonly verificationRepository: VerificationRepository,
+  ) {}
 
   /**
-   * Tren penerbitan sertifikat user selama N hari terakhir.
+   * Mengambil ringkasan statistik dan tren penerbitan sertifikat untuk dasbor pengguna/organisasi.
    */
-  async getCertificateTrend(
-    userId: string,
-    days = 30,
-  ): Promise<{ date: string; count: number }[]> {
-    const since = new Date();
-    since.setDate(since.getDate() - days);
-
-    const { data: userEvents } = await supabase
-      .from("events")
-      .select("id")
-      .eq("user_id", userId);
-
-    const eventIds = (userEvents ?? []).map((e: { id: string }) => e.id);
-    if (eventIds.length === 0) return [];
-
-    const { data } = await supabase
-      .from("certificates")
-      .select("issued_at")
-      .in("event_id", eventIds)
-      .gte("issued_at", since.toISOString());
-
-    if (!data) return [];
-
-    const byDate: Record<string, number> = {};
-    for (const cert of data as { issued_at: string }[]) {
-      const date = cert.issued_at.split("T")[0];
-      byDate[date] = (byDate[date] ?? 0) + 1;
-    }
-
-    return Object.entries(byDate)
-      .map(([date, count]) => ({ date, count }))
-      .sort((a, b) => a.date.localeCompare(b.date));
-  }
-
-  /**
-   * Admin: statistik keseluruhan platform.
-   */
-  async getAdminStats(): Promise<{
-    totalUsers: number;
-    activeUsers: number;
-    totalEvents: number;
-    totalCertificates: number;
-    activeCertificates: number;
-    revokedCertificates: number;
-    totalVerifications: number;
-  }> {
-    const [
-      { count: totalUsers },
-      { count: activeUsers },
-      { count: totalEvents },
-      { count: totalCertificates },
-      { count: activeCertificates },
-      { count: revokedCertificates },
-      { count: totalVerifications },
-    ] = await Promise.all([
-      // Hitung khusus role 'user' (organisasi/mitra)
-      supabase
-        .from("profiles")
-        .select("id", { count: "exact", head: true })
-        .eq("role", "user"),
-      supabase
-        .from("profiles")
-        .select("id", { count: "exact", head: true })
-        .eq("role", "user")
-        .eq("status", "active"),
-      supabase.from("events").select("id", { count: "exact", head: true }),
-      supabase
-        .from("certificates")
-        .select("id", { count: "exact", head: true }),
-      supabase
-        .from("certificates")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "active"),
-      supabase
-        .from("certificates")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "revoked"),
-      supabase
-        .from("verification_logs")
-        .select("id", { count: "exact", head: true }),
+  async getUserDashboard(userId: string) {
+    const [stats, certificateTrend] = await Promise.all([
+      this.dashboardRepository.getUserStats(userId),
+      this.dashboardRepository.getCertificateTrend(userId, 30),
     ]);
 
     return {
-      totalUsers: totalUsers ?? 0,
-      activeUsers: activeUsers ?? 0,
-      totalEvents: totalEvents ?? 0,
-      totalCertificates: totalCertificates ?? 0,
-      activeCertificates: activeCertificates ?? 0,
-      revokedCertificates: revokedCertificates ?? 0,
-      totalVerifications: totalVerifications ?? 0,
+      stats,
+      charts: {
+        certificateIssuanceTrend: certificateTrend,
+      },
+    };
+  }
+
+  /**
+   * Mengambil statistik platform secara menyeluruh untuk dasbor admin.
+   */
+  async getAdminDashboard() {
+    const [stats, verificationStats] = await Promise.all([
+      this.dashboardRepository.getAdminStats(),
+      this.verificationRepository.getStats(),
+    ]);
+
+    return {
+      stats,
+      verificationStats,
     };
   }
 }
+
+export default DashboardService;
