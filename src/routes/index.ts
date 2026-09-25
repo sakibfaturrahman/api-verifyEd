@@ -12,11 +12,16 @@ import notificationRouter from "../modules/notifications/notification.routes";
 const router = Router();
 
 router.use("/auth", authRouter);
+
+// Daftarkan userRouter di kedua prefix: /profile DAN /users
 router.use("/profile", userRouter);
+router.use("/users", userRouter);
+
 router.use("/events", eventRouter);
 router.use("/certificates", certificateRouter);
 router.use("/verify", verificationRouter);
 router.use("/dashboard", dashboardRouter);
 router.use("/admin", adminRouter);
 router.use("/notifications", notificationRouter);
+
 export default router;
