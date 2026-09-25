@@ -53,13 +53,38 @@ export interface BulkUploadResult {
 }
 
 export class CertificateService {
+  // Nama bucket aman dengan fallback ke "certificates"
+  private readonly bucketOriginal =
+    env.SUPABASE_STORAGE_BUCKET_ORIGINAL || "certificates";
+  private readonly bucketGenerated =
+    env.SUPABASE_STORAGE_BUCKET_GENERATED || "certificates";
+
   constructor(
     private readonly certRepository: CertificateRepository,
     private readonly eventService: EventService,
     private readonly notificationService: NotificationService,
   ) {}
 
-  // alur unggah dan generasi sertifikat tunggal
+  // Helper verifikasi kepemilikan sertifikat yang aman
+  private checkOwnership(
+    cert: CertificateWithEvent,
+    userId: string,
+    isAdmin: boolean,
+  ): void {
+    if (isAdmin) return;
+
+    // Menangani variasi penamaan relasi (events / event) atau pengecekan via event_id
+    const ownerId =
+      (cert as any).events?.user_id ||
+      (cert as any).event?.user_id ||
+      (cert as any).user_id;
+
+    if (ownerId && ownerId !== userId) {
+      throw new ForbiddenError("Anda tidak memiliki akses ke sertifikat ini.");
+    }
+  }
+
+  // Alur unggah dan generasi sertifikat tunggal
   async uploadCertificate(
     userId: string,
     dto: UploadCertificateDto,
@@ -76,7 +101,10 @@ export class CertificateService {
       throw new AppError(validation.error!, 400, "INVALID_FILE");
     }
 
-    const event = await this.eventService.assertEventOwnership(dto.event_id, userId);
+    const event = await this.eventService.assertEventOwnership(
+      dto.event_id,
+      userId,
+    );
 
     const certificateNumber = generateCertificateNumber();
     const qrToken = generateSecureToken(32);
@@ -103,13 +131,15 @@ export class CertificateService {
     );
 
     try {
+      // 1. Unggah PDF Original
       await this.certRepository.uploadFile(
-        env.SUPABASE_STORAGE_BUCKET_ORIGINAL,
+        this.bucketOriginal,
         originalPath,
         file.buffer,
         "application/pdf",
       );
 
+      // 2. Sematkan QR Code pada PDF
       const { generatedPdfBuffer, appliedConfig } = await embedQrCodeInPdf({
         pdfBuffer: file.buffer,
         certificateNumber,
@@ -120,13 +150,15 @@ export class CertificateService {
 
       const generatedFileHash = sha256(generatedPdfBuffer);
 
+      // 3. Unggah PDF yang sudah memiliki QR
       await this.certRepository.uploadFile(
-        env.SUPABASE_STORAGE_BUCKET_GENERATED,
+        this.bucketGenerated,
         generatedPath,
         generatedPdfBuffer,
         "application/pdf",
       );
 
+      // 4. Update data file dan hash di database
       await this.certRepository.updateFileInfo(certificate.id, {
         original_file: originalPath,
         generated_file: generatedPath,
@@ -136,10 +168,10 @@ export class CertificateService {
 
       logger.info(
         { certificateId: certificate.id, certificateNumber },
-        "Certificate uploaded and generated",
+        "Certificate uploaded and generated successfully",
       );
 
-      // notifikasi ke pengguna bahwa sertifikat berhasil diterbitkan
+      // Notifikasi ke user
       try {
         await this.notificationService.notifyUserCertificateIssued(userId, {
           certificateNumber,
@@ -149,7 +181,7 @@ export class CertificateService {
       } catch (notifErr) {
         logger.warn(
           { notifErr, certificateNumber },
-          "failed to send user certificate issued notification",
+          "Failed to send user certificate issued notification",
         );
       }
 
@@ -160,10 +192,10 @@ export class CertificateService {
         err instanceof Error ? err.message : "Gagal memproses berkas PDF";
       logger.error(
         { certificateId: certificate.id, err },
-        "Certificate upload failed, cleaning up",
+        "Certificate upload failed, cleaning up artifacts",
       );
 
-      // notifikasi ke pengguna jika terjadi kegagalan pemrosesan pdf
+      // Notifikasi kegagalan
       try {
         await this.notificationService.notifyUserProcessingFailed(userId, {
           fileName: file.originalname,
@@ -172,24 +204,33 @@ export class CertificateService {
       } catch (notifErr) {
         logger.warn(
           { notifErr, fileName: file.originalname },
-          "failed to send user processing failed notification",
+          "Failed to send user processing failed notification",
         );
       }
 
-      await this.certRepository
-        .deleteFile(env.SUPABASE_STORAGE_BUCKET_ORIGINAL, originalPath)
-        .catch(() => {});
-      await this.certRepository
-        .deleteFile(env.SUPABASE_STORAGE_BUCKET_GENERATED, generatedPath)
-        .catch(() => {});
+      // Rollback file jika sempat terunggah
+      try {
+        await this.certRepository.deleteFile(this.bucketOriginal, originalPath);
+      } catch {}
 
-      const { supabase } = await import("../../config/supabase");
-      await supabase.from("certificates").delete().eq("id", certificate.id);
+      try {
+        await this.certRepository.deleteFile(
+          this.bucketGenerated,
+          generatedPath,
+        );
+      } catch {}
+
+      // Hapus row sertifikat yang gagal (tanpa .catch())
+      try {
+        const { supabase } = await import("../../config/supabase");
+        await supabase.from("certificates").delete().eq("id", certificate.id);
+      } catch {}
+
       throw err;
     }
   }
 
-  // alur unggah sertifikat massal dengan dukungan kustom koordinat posisi QR
+  // Alur unggah sertifikat massal
   async bulkUploadCertificates(
     userId: string,
     eventId: string,
@@ -204,7 +245,7 @@ export class CertificateService {
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const recipientName =
-        recipientNames[i] ?? file.originalname.replace(".pdf", "");
+        recipientNames[i] ?? file.originalname.replace(/\.pdf$/i, "");
 
       try {
         const uploadResult = await this.uploadCertificate(
@@ -233,10 +274,11 @@ export class CertificateService {
       }
     }
 
-    const successfulCount = results.filter((r) => r.status === "success").length;
+    const successfulCount = results.filter(
+      (r) => r.status === "success",
+    ).length;
     const failedCount = results.filter((r) => r.status === "failed").length;
 
-    // notifikasi ringkasan unggah massal ke pengguna
     try {
       await this.notificationService.notifyUserBulkUploadCompleted(userId, {
         eventName: event.name,
@@ -246,11 +288,10 @@ export class CertificateService {
     } catch (notifErr) {
       logger.warn(
         { notifErr, eventId },
-        "failed to send user bulk upload notification",
+        "Failed to send user bulk upload notification",
       );
     }
 
-    // notifikasi ke admin jika jumlah penerbitan massal berskala besar
     if (successfulCount >= 10) {
       try {
         await this.notificationService.notifyBulkIssuance({
@@ -261,7 +302,7 @@ export class CertificateService {
       } catch (notifErr) {
         logger.warn(
           { notifErr, eventId },
-          "failed to send admin bulk issuance notification",
+          "Failed to send admin bulk issuance notification",
         );
       }
     }
@@ -274,7 +315,7 @@ export class CertificateService {
     };
   }
 
-  // ambil daftar sertifikat milik pengguna dengan paginasi
+  // Ambil daftar sertifikat milik user dengan paginasi
   async listCertificates(userId: string, query: ListCertificatesQuery) {
     const { page, limit, offset } = parsePagination(query.page, query.limit);
     const { data, total } = await this.certRepository.findAll({
@@ -289,7 +330,7 @@ export class CertificateService {
     return { data, meta: buildPaginationMeta(page, limit, total) };
   }
 
-  // ambil satu sertifikat berdasarkan id
+  // Ambil satu sertifikat berdasarkan ID
   async getCertificateById(
     id: string,
     userId: string,
@@ -298,14 +339,11 @@ export class CertificateService {
     const cert = await this.certRepository.findById(id);
     if (!cert) throw new NotFoundError("Certificate");
 
-    if (!isAdmin && cert.events.user_id !== userId) {
-      throw new ForbiddenError("You do not have access to this certificate");
-    }
-
+    this.checkOwnership(cert, userId, isAdmin);
     return cert;
   }
 
-  // dapatkan signed url berkas pdf untuk diunduh
+  // Unduh sertifikat via signed URL
   async downloadCertificate(
     id: string,
     userId: string,
@@ -323,17 +361,17 @@ export class CertificateService {
     }
 
     const bucket = cert.generated_file
-      ? env.SUPABASE_STORAGE_BUCKET_GENERATED
-      : env.SUPABASE_STORAGE_BUCKET_ORIGINAL;
+      ? this.bucketGenerated
+      : this.bucketOriginal;
 
     return this.certRepository.getSignedUrl(
       filePath,
       bucket,
-      env.SIGNED_URL_EXPIRY,
+      env.SIGNED_URL_EXPIRY || 3600,
     );
   }
 
-  // batalkan atau cabut status keabsahan sertifikat
+  // Pencabutan status sertifikat
   async revokeCertificate(
     id: string,
     userId: string,
@@ -353,122 +391,99 @@ export class CertificateService {
     const revokedCert = await this.certRepository.revoke(id, dto.reason);
     logger.info({ certificateId: id, userId }, "Certificate revoked");
 
-    // notifikasi ke pemilik sertifikat bahwa sertifikat telah dicabut
+    const ownerId =
+      (cert as any).events?.user_id || (cert as any).event?.user_id || userId;
+
     try {
-      await this.notificationService.notifyUserCertificateRevoked(
-        cert.events.user_id,
-        {
-          certificateNumber: cert.certificate_number,
-          recipientName: cert.recipient_name,
-          reason: dto.reason,
-        },
-      );
+      await this.notificationService.notifyUserCertificateRevoked(ownerId, {
+        certificateNumber: cert.certificate_number,
+        recipientName: cert.recipient_name,
+        reason: dto.reason,
+      });
     } catch (notifErr) {
       logger.warn(
         { notifErr, certificateId: id },
-        "failed to send user certificate revoked notification",
+        "Failed to send user certificate revoked notification",
       );
     }
 
     return revokedCert;
   }
 
-  // buat ulang berkas sertifikat dengan berkas pdf baru
-  async regenerateCertificate(
-    id: string,
-    userId: string,
-    file: Express.Multer.File,
-    verifyBaseUrl: string,
-  ): Promise<CertificateWithEvent> {
-    const cert = await this.getCertificateById(id, userId);
-
-    const validation = validatePdfFile(
-      file.originalname,
-      file.mimetype,
-      file.buffer,
-      env.MAX_FILE_SIZE,
-    );
-    if (!validation.valid) {
-      throw new AppError(validation.error!, 400, "INVALID_FILE");
-    }
-
-    const originalPath = buildStoragePath(
-      userId,
-      cert.event_id,
-      cert.id,
-      "original",
-    );
-    const generatedPath = buildStoragePath(
-      userId,
-      cert.event_id,
-      cert.id,
-      "generated",
-    );
-
-    if (cert.generated_file) {
-      await this.certRepository
-        .deleteFile(env.SUPABASE_STORAGE_BUCKET_GENERATED, generatedPath)
-        .catch(() => {});
-    }
-
-    await this.certRepository.uploadFile(
-      env.SUPABASE_STORAGE_BUCKET_ORIGINAL,
-      originalPath,
-      file.buffer,
-      "application/pdf",
-    );
-
-    const { generatedPdfBuffer, appliedConfig } = await embedQrCodeInPdf({
-      pdfBuffer: file.buffer,
-      certificateNumber: cert.certificate_number,
-      qrToken: cert.qr_token,
-      verifyBaseUrl,
-      qrConfig: cert.qr_config ?? undefined,
-    });
-
-    const newGeneratedFileHash = sha256(generatedPdfBuffer);
-
-    await this.certRepository.uploadFile(
-      env.SUPABASE_STORAGE_BUCKET_GENERATED,
-      generatedPath,
-      generatedPdfBuffer,
-      "application/pdf",
-    );
-
-    await this.certRepository.updateFileInfo(cert.id, {
-      original_file: originalPath,
-      generated_file: generatedPath,
-      file_hash: newGeneratedFileHash,
-      qr_config: appliedConfig,
-    });
-
-    logger.info({ certificateId: id }, "Certificate regenerated");
-
-    return (await this.certRepository.findById(id))!;
-  }
-
-  // simpan koordinat posisi barcode qr
+  // Terapkan penempatan posisi QR baru dan re-render PDF
   async saveQrConfig(
     certificateId: string,
     userId: string,
     config: QrConfigDto,
+    verifyBaseUrl = "https://verifyed.id",
   ): Promise<CertificateRow> {
     const cert = await this.certRepository.findById(certificateId);
     if (!cert) throw new NotFoundError("Certificate");
-    if (cert.events.user_id !== userId)
-      throw new ForbiddenError("Not your certificate");
+    this.checkOwnership(cert, userId, false);
 
-    return this.certRepository.updateQrConfig(certificateId, {
-      x: config.x,
-      y: config.y,
-      width: config.width,
-      height: config.height,
-      page: config.page,
-      rotation: config.rotation,
-    });
+    // 1. Simpan koordinat baru ke database
+    const updatedCert = await this.certRepository.updateQrConfig(
+      certificateId,
+      {
+        x: config.x,
+        y: config.y,
+        width: config.width,
+        height: config.height,
+        page: config.page,
+        rotation: config.rotation,
+      },
+    );
+
+    // 2. Jika ada berkas original, generate ulang PDF dengan koordinat baru
+    if (cert.original_file) {
+      try {
+        const { supabase } = await import("../../config/supabase");
+        const { data: fileBlob, error: downloadErr } = await supabase.storage
+          .from(this.bucketOriginal)
+          .download(cert.original_file);
+
+        if (!downloadErr && fileBlob) {
+          const originalBuffer = Buffer.from(await fileBlob.arrayBuffer());
+
+          const { generatedPdfBuffer, appliedConfig } = await embedQrCodeInPdf({
+            pdfBuffer: originalBuffer,
+            certificateNumber: cert.certificate_number,
+            qrToken: cert.qr_token,
+            verifyBaseUrl,
+            qrConfig: config as QrConfig,
+          });
+
+          const newHash = sha256(generatedPdfBuffer);
+          const generatedPath =
+            cert.generated_file ||
+            buildStoragePath(userId, cert.event_id, cert.id, "generated");
+
+          await this.certRepository.uploadFile(
+            this.bucketGenerated,
+            generatedPath,
+            generatedPdfBuffer,
+            "application/pdf",
+          );
+
+          await this.certRepository.updateFileInfo(cert.id, {
+            generated_file: generatedPath,
+            file_hash: newHash,
+            qr_config: appliedConfig,
+          });
+        }
+      } catch (genErr) {
+        logger.warn(
+          { genErr, certificateId },
+          "Failed to re-render generated PDF during saveQrConfig, saved config only",
+        );
+      }
+    }
+
+    return updatedCert;
   }
 
-  // hapus sertifikat beserta file fisiknya di storage bucket
+  // Hapus sertifikat secara tuntas beserta relasi & berkas fisiknya
+  // Hapus sertifikat secara tuntas beserta relasi & berkas fisiknya
   async deleteCertificate(
     id: string,
     userId: string,
@@ -476,33 +491,65 @@ export class CertificateService {
   ): Promise<void> {
     const cert = await this.getCertificateById(id, userId, isAdmin);
 
+    // 1. Bersihkan log verifikasi terkait terlebih dahulu (dengan penanganan error Supabase yang valid)
+    try {
+      const { supabase } = await import("../../config/supabase");
+      const { error: logDeleteError } = await supabase
+        .from("verification_logs")
+        .delete()
+        .eq("certificate_id", id);
+
+      if (logDeleteError) {
+        logger.warn(
+          { err: logDeleteError, id },
+          "Failed to clean up associated verification logs",
+        );
+      }
+    } catch (err) {
+      logger.warn(
+        { err, id },
+        "Exception while deleting associated verification logs",
+      );
+    }
+
+    // 2. Hapus berkas fisik PDF di storage
     if (cert.original_file) {
-      await this.certRepository
-        .deleteFile(env.SUPABASE_STORAGE_BUCKET_ORIGINAL, cert.original_file)
-        .catch((err) => {
-          logger.warn(
-            { err, file: cert.original_file },
-            "failed to remove original storage file",
-          );
-        });
+      try {
+        await this.certRepository.deleteFile(
+          this.bucketOriginal,
+          cert.original_file,
+        );
+      } catch (err) {
+        logger.warn(
+          { err, file: cert.original_file },
+          "Failed to remove original storage file",
+        );
+      }
     }
 
     if (cert.generated_file) {
-      await this.certRepository
-        .deleteFile(env.SUPABASE_STORAGE_BUCKET_GENERATED, cert.generated_file)
-        .catch((err) => {
-          logger.warn(
-            { err, file: cert.generated_file },
-            "failed to remove generated storage file",
-          );
-        });
+      try {
+        await this.certRepository.deleteFile(
+          this.bucketGenerated,
+          cert.generated_file,
+        );
+      } catch (err) {
+        logger.warn(
+          { err, file: cert.generated_file },
+          "Failed to remove generated storage file",
+        );
+      }
     }
 
+    // 3. Hapus entri sertifikat dari database
     await this.certRepository.delete(id);
-    logger.info({ certificateId: id, userId }, "certificate deleted successfully");
+    logger.info(
+      { certificateId: id, userId },
+      "Certificate deleted successfully",
+    );
   }
 
-  // ambil seluruh sertifikat sistem untuk kebutuhan admin
+  // Ambil seluruh sertifikat sistem untuk kebutuhan admin
   async listAllCertificates(query: ListCertificatesQuery) {
     const { page, limit, offset } = parsePagination(query.page, query.limit);
     const { data, total } = await this.certRepository.findAll({
@@ -516,7 +563,7 @@ export class CertificateService {
     return { data, meta: buildPaginationMeta(page, limit, total) };
   }
 
-  // pencabutan sertifikat massal oleh admin
+  // Pencabutan sertifikat massal oleh admin
   async bulkRevoke(
     ids: string[],
     reason: string,
@@ -525,7 +572,6 @@ export class CertificateService {
     const results = await this.certRepository.bulkRevoke(ids, reason);
     logger.info({ count: results.length, reason }, "Bulk revoke performed");
 
-    // notifikasi pencabutan massal ke panel admin
     if (results.length > 0) {
       try {
         await this.notificationService.notifyBulkRevoke({
@@ -536,7 +582,7 @@ export class CertificateService {
       } catch (notifErr) {
         logger.warn(
           { notifErr },
-          "failed to send admin bulk revoke notification",
+          "Failed to send admin bulk revoke notification",
         );
       }
     }
@@ -544,3 +590,5 @@ export class CertificateService {
     return { revoked: results.length };
   }
 }
+
+export default CertificateService;
